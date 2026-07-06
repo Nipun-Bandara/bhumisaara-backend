@@ -1,9 +1,9 @@
-package com.bhumisaara.service;
+package com.bandits.bhumisaara.service;
 
-import com.bhumisaara.dto.request.LoginRequest;
-import com.bhumisaara.dto.request.RegisterRequest;
-import com.bhumisaara.dto.response.AuthResponse;
-import com.bhumisaara.dto.response.TokenValidationResponse;
+import com.bandits.bhumisaara.dto.request.LoginRequest;
+import com.bandits.bhumisaara.dto.request.RegisterRequest;
+import com.bandits.bhumisaara.dto.response.AuthResponse;
+import com.bandits.bhumisaara.dto.response.TokenValidationResponse;
 
 public interface AuthService {
     AuthResponse register(RegisterRequest request);
@@ -14,5 +14,5 @@ public interface AuthService {
 
     TokenValidationResponse validateToken(String token);
 
-    AuthResponse refreshToken(com.bhumisaara.dto.request.RefreshTokenRequest request);
+    AuthResponse refreshToken(com.bandits.bhumisaara.dto.request.RefreshTokenRequest request);
 }

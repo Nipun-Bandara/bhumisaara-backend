@@ -1,4 +1,4 @@
-package com.bhumisaara.entity;
+package com.bandits.bhumisaara.entity;
 
 import jakarta.persistence.*;
 import lombok.*;

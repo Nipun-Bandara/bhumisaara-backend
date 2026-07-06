@@ -1,6 +1,6 @@
-package com.bhumisaara.security;
+package com.bandits.bhumisaara.security;
 
-import com.bhumisaara.repository.UserRepository;
+import com.bandits.bhumisaara.repository.UserRepository;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;

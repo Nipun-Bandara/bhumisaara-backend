@@ -1,4 +1,4 @@
-package com.bhumisaara.dto.response;
+package com.bandits.bhumisaara.dto.response;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

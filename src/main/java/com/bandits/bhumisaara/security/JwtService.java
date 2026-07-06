@@ -1,6 +1,6 @@
-package com.bhumisaara.security;
+package com.bandits.bhumisaara.security;
 
-import com.bhumisaara.entity.UserEntity;
+import com.bandits.bhumisaara.entity.UserEntity;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;

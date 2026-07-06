@@ -1,6 +1,6 @@
-package com.bhumisaara.entity;
+package com.bandits.bhumisaara.entity;
 
-import com.bhumisaara.enums.Role;
+import com.bandits.bhumisaara.enums.Role;
 import jakarta.persistence.*;
 import lombok.*;
 

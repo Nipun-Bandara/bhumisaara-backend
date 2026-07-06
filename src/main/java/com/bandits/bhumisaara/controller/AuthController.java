@@ -1,10 +1,10 @@
-package com.bhumisaara.controller;
+package com.bandits.bhumisaara.controller;
 
-import com.bhumisaara.dto.request.LoginRequest;
-import com.bhumisaara.dto.request.RegisterRequest;
-import com.bhumisaara.dto.response.AuthResponse;
-import com.bhumisaara.dto.response.TokenValidationResponse;
-import com.bhumisaara.service.AuthService;
+import com.bandits.bhumisaara.dto.request.LoginRequest;
+import com.bandits.bhumisaara.dto.request.RegisterRequest;
+import com.bandits.bhumisaara.dto.response.AuthResponse;
+import com.bandits.bhumisaara.dto.response.TokenValidationResponse;
+import com.bandits.bhumisaara.service.AuthService;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -38,7 +38,7 @@ public class AuthController {
 
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refreshToken(
-            @Valid @RequestBody com.bhumisaara.dto.request.RefreshTokenRequest request) {
+            @Valid @RequestBody com.bandits.bhumisaara.dto.request.RefreshTokenRequest request) {
         return ResponseEntity
                 .ok()
                 .contentType(MediaType.APPLICATION_JSON)

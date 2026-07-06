@@ -1,4 +1,4 @@
-package com.bhumisaara.dto.request;
+package com.bandits.bhumisaara.dto.request;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;

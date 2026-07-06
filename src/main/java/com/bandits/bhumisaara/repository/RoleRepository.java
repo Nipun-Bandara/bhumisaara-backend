@@ -1,7 +1,7 @@
-package com.bhumisaara.repository;
+package com.bandits.bhumisaara.repository;
 
-import com.bhumisaara.entity.RoleEntity;
-import com.bhumisaara.enums.Role;
+import com.bandits.bhumisaara.entity.RoleEntity;
+import com.bandits.bhumisaara.enums.Role;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;

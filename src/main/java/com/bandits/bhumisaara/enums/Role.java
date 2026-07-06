@@ -1,4 +1,4 @@
-package com.bhumisaara.enums;
+package com.bandits.bhumisaara.enums;
 
 public enum Role {
     SYSTEM_ADMIN,

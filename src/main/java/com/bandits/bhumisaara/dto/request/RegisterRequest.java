@@ -1,6 +1,6 @@
-package com.bhumisaara.dto.request;
+package com.bandits.bhumisaara.dto.request;
 
-import com.bhumisaara.enums.Role;
+import com.bandits.bhumisaara.enums.Role;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -20,7 +20,7 @@ public class RegisterRequest {
     @NotBlank(message = "Email is required")
     private String email;
 
-    @NotBlank(message = "Username is required")
+    @NotBlank(message = "User name is required")
     private String username;
 
     @NotBlank(message = "Password is required")

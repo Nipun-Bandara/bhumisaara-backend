@@ -1,4 +1,4 @@
-package com.bhumisaara.exception;
+package com.bandits.bhumisaara.exception;
 
 public class AccountBannedException extends RuntimeException {
 

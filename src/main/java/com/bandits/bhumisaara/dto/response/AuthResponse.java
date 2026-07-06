@@ -1,6 +1,6 @@
-package com.bhumisaara.dto.response;
+package com.bandits.bhumisaara.dto.response;
 
-import com.bhumisaara.enums.Role;
+import com.bandits.bhumisaara.enums.Role;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
