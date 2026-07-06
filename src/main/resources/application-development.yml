@@ -2,9 +2,9 @@ spring:
   config:
     import: optional:file:.env.development[.properties]
   datasource:
-    url: jdbc:postgresql://ep-plain-tooth-ate9x0pr-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channelBinding=require
-    username: neondb_owner
-    password: npg_2qGOHFmJEpo8
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 100
