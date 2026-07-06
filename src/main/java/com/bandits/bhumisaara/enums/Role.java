@@ -1,0 +1,10 @@
+package com.bhumisaara.enums;
+
+public enum Role {
+    SYSTEM_ADMIN,
+    GOVERNMENT_ADMIN,
+    AGRARIAN_SERVICE_OFFICER,
+    FARMER,
+    PRIVATE_AGRO_DEALER,
+    ORGANIC_FERTILIZER_PRODUCER
+}
