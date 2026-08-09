@@ -27,22 +27,27 @@ src/main/java/com/bandits/bhumisaara/
 ├── BhumisaaraApplication.java      # Main application entry point
 ├── controller/                     # REST API Controllers
 │   ├── AuthController.java         # Authentication & Token validation endpoints
-│   └── FertilizerBatchController.java # Fertilizer batch minting & querying endpoints
+│   ├── FertilizerBatchController.java # Fertilizer batch minting & querying endpoints
+│   └── DistributionController.java # Farmer handover / token-burn distribution endpoints
 ├── dto/                            # Data Transfer Objects
 │   ├── request/                    # Incoming payload DTOs with validation
 │   │   ├── BatchRequestDTO.java
+│   │   ├── HandoverRequestDTO.java
 │   │   ├── LoginRequest.java
 │   │   ├── RefreshTokenRequest.java
 │   │   └── RegisterRequest.java
 │   └── response/                   # Outgoing API response DTOs
 │       ├── AuthResponse.java
 │       ├── BatchResponseDTO.java
+│       ├── DistributionResponseDTO.java
 │       ├── ErrorResponse.java
 │       └── TokenValidationResponse.java
 ├── entity/                         # JPA Database Entities
+│   ├── DistributionLogEntity.java
 │   ├── FertilizerBatchEntity.java
 │   ├── RoleEntity.java
-│   └── UserEntity.java
+│   ├── UserEntity.java
+│   └── UserQuotaEntity.java
 ├── enums/                          # System Enums
 │   └── Role.java
 ├── exception/                      # Global Exception Handlers & Custom Exceptions
@@ -50,8 +55,10 @@ src/main/java/com/bandits/bhumisaara/
 │   ├── GlobalExceptionHandler.java
 │   └── InvalidTokenException.java
 ├── repository/                     # Spring Data JPA Repositories
+│   ├── DistributionLogRepository.java
 │   ├── FertilizerBatchRepository.java
 │   ├── RoleRepository.java
+│   ├── UserQuotaRepository.java
 │   └── UserRepository.java
 ├── security/                       # Spring Security & JWT components
 │   ├── JwtAuthFilter.java
@@ -59,6 +66,7 @@ src/main/java/com/bandits/bhumisaara/
 │   └── SecurityConfig.java
 └── service/                        # Business Logic Layer
     ├── AuthService.java
+    ├── DistributionService.java
     ├── FertilizerBatchService.java
     └── impl/
         └── AuthServiceImpl.java
@@ -104,6 +112,27 @@ Mapped by `FertilizerBatchEntity.java`. Represents supply chain fertilizer batch
 - `minted_by_user_id` (BIGINT, Nullable = false) — References Government Admin user ID.
 - `created_at` (TIMESTAMP, Updatable = false, set automatically via `@PrePersist`).
 
+### `distribution_logs` Table
+Mapped by `DistributionLogEntity.java`. Records physical handover of fertilizer to a farmer and the corresponding blockchain token burn.
+- `distribution_id` (BIGINT, Primary Key, Identity)
+- `token_id` (VARCHAR, Nullable = false) — ERC-1155 token ID; stored as `String` per the `tokenId` convention in §7 (avoids `uint256` overflow on `Integer`/`Long`).
+- `batch_id` (BIGINT, Nullable = false) — References `fertilizer_batches.batch_id`.
+- `farmer_id` (BIGINT, Nullable = false) — References `users.user_id`.
+- `officer_id` (BIGINT, Nullable = false) — References `users.user_id` (Agrarian Extension Officer who performed the handover).
+- `amount_dispensed_kg` (INTEGER, Nullable = false)
+- `burn_transaction_hash` (VARCHAR, Unique, Nullable = false) — Cryptographic proof of the Polygon token burn; also used to reject duplicate/replayed handover calls.
+- `created_at` (TIMESTAMP, Updatable = false, set automatically via `@PrePersist`).
+
+### `user_quotas` Table
+Mapped by `UserQuotaEntity.java`. Tracks each farmer's remaining fertilizer allowance per fertilizer type.
+- `quota_id` (BIGINT, Primary Key, Identity)
+- `farmer_id` (BIGINT, Nullable = false) — References `users.user_id`.
+- `fertilizer_type` (VARCHAR, Nullable = false)
+- `remaining_kg` (INTEGER, Nullable = false)
+- `updated_at` (TIMESTAMP, Nullable = false)
+- Unique constraint on (`farmer_id`, `fertilizer_type`) — one quota row per farmer per fertilizer type.
+- *Note: no allocation/replenishment endpoint exists yet — rows must currently be seeded manually. A farmer with no row for a given fertilizer type is rejected by `POST /api/v1/distributions` (400, "No quota allocated").*
+
 ---
 
 ## 4. REST API Documentation
@@ -126,6 +155,12 @@ Mapped by `FertilizerBatchEntity.java`. Represents supply chain fertilizer batch
 | `GET` | `/api/batches` | List all recorded batches | None | `List<BatchResponseDTO>` | Yes |
 | `GET` | `/api/batches/{batchId}` | Get batch details by database ID | None | `BatchResponseDTO` | Yes |
 | `GET` | `/api/batches/token/{tokenId}` | Get batch details by blockchain token ID | None | `BatchResponseDTO` | Yes |
+
+### Distributions (`/api/v1/distributions`)
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `POST` | `/api/v1/distributions` | Record a farmer handover (deducts batch volume + farmer quota, logs the token burn) | `HandoverRequestDTO` | `DistributionResponseDTO` | No (JWT Required) |
 
 ---
 
