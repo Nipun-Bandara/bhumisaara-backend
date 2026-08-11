@@ -32,6 +32,13 @@ public class UserEntity implements UserDetails {
     @Column(nullable = false)
     private String password;
 
+    @Column(name = "wallet_address", length = 42, unique = true)
+    private String walletAddress;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "area_id")
+    private AreaEntity area;
+
     @Builder.Default
     @Column(name = "is_banned", nullable = false)
     private Boolean isBanned = false;
@@ -48,6 +55,20 @@ public class UserEntity implements UserDetails {
     @Builder.Default
     @Column(name = "is_assigned", nullable = false)
     private Boolean isAssigned = false;
+
+    @PrePersist
+    @PreUpdate
+    protected void normalise() {
+        if (walletAddress != null) {
+            // Blank input must collapse to null: wallet_address is unique, and
+            // Postgres allows many NULLs but only one "".
+            String trimmed = walletAddress.trim();
+            walletAddress = trimmed.isEmpty() ? null : trimmed.toLowerCase();
+        }
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+    }
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {

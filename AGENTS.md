@@ -26,37 +26,51 @@ Welcome to the **Bhumisaara Backend** repository. This document serves as the pr
 src/main/java/com/bandits/bhumisaara/
 ├── BhumisaaraApplication.java      # Main application entry point
 ├── controller/                     # REST API Controllers
+│   ├── AreaController.java         # Area lookup endpoints
 │   ├── AuthController.java         # Authentication & Token validation endpoints
 │   ├── FertilizerBatchController.java # Fertilizer batch minting & querying endpoints
+│   ├── FertilizerRequestController.java # Farmer subsidy requests & officer review
+│   ├── OfficerController.java      # Officer listing & area-assignment endpoints
 │   └── DistributionController.java # Farmer handover / token-burn distribution endpoints
 ├── dto/                            # Data Transfer Objects
 │   ├── request/                    # Incoming payload DTOs with validation
+│   │   ├── AssignOfficerRequestDTO.java
 │   │   ├── BatchRequestDTO.java
+│   │   ├── FertilizerRequestCreateDTO.java
+│   │   ├── FertilizerRequestReviewDTO.java
 │   │   ├── HandoverRequestDTO.java
 │   │   ├── LoginRequest.java
 │   │   ├── RefreshTokenRequest.java
 │   │   └── RegisterRequest.java
 │   └── response/                   # Outgoing API response DTOs
+│       ├── AreaResponseDTO.java
 │       ├── AuthResponse.java
 │       ├── BatchResponseDTO.java
 │       ├── DistributionResponseDTO.java
 │       ├── ErrorResponse.java
+│       ├── FertilizerRequestResponseDTO.java
+│       ├── OfficerResponseDTO.java
 │       └── TokenValidationResponse.java
 ├── entity/                         # JPA Database Entities
+│   ├── AreaEntity.java
 │   ├── DistributionLogEntity.java
 │   ├── FertilizerBatchEntity.java
+│   ├── FertilizerRequestEntity.java
 │   ├── RoleEntity.java
 │   ├── UserEntity.java
 │   └── UserQuotaEntity.java
 ├── enums/                          # System Enums
+│   ├── RequestStatus.java
 │   └── Role.java
 ├── exception/                      # Global Exception Handlers & Custom Exceptions
 │   ├── AccountBannedException.java
 │   ├── GlobalExceptionHandler.java
 │   └── InvalidTokenException.java
 ├── repository/                     # Spring Data JPA Repositories
+│   ├── AreaRepository.java
 │   ├── DistributionLogRepository.java
 │   ├── FertilizerBatchRepository.java
+│   ├── FertilizerRequestRepository.java
 │   ├── RoleRepository.java
 │   ├── UserQuotaRepository.java
 │   └── UserRepository.java
@@ -65,9 +79,12 @@ src/main/java/com/bandits/bhumisaara/
 │   ├── JwtService.java
 │   └── SecurityConfig.java
 └── service/                        # Business Logic Layer
+    ├── AreaService.java
     ├── AuthService.java
     ├── DistributionService.java
     ├── FertilizerBatchService.java
+    ├── FertilizerRequestService.java
+    ├── OfficerService.java
     └── impl/
         └── AuthServiceImpl.java
 ```
@@ -96,10 +113,20 @@ Mapped by `UserEntity.java`. Implements Spring Security `UserDetails`.
 - `username` (VARCHAR, Unique, Nullable = false)
 - `email` (VARCHAR, Unique, Nullable = false)
 - `password` (VARCHAR, Encrypted BCrypt, Nullable = false)
+- `wallet_address` (VARCHAR(42), Unique, Nullable) — EVM address, normalised to lowercase on persist/update; blank input collapses to `NULL` so the unique index isn't tripped by repeated `''`.
 - `role_id` (BIGINT, Foreign Key referencing `roles.role_id`)
+- `area_id` (BIGINT, Foreign Key referencing `areas.area_id`, Nullable) — set by `POST /api/officers/assign`.
 - `is_banned` (BOOLEAN, Default: false)
-- `is_assigned` (BOOLEAN, Default: false)
+- `is_assigned` (BOOLEAN, Default: false) — set true when an officer is assigned to an area.
 - `created_at` (TIMESTAMP, Updatable = false)
+
+### `areas` Table
+Mapped by `AreaEntity.java`. Geographic areas an agrarian service officer can be assigned to.
+- `area_id` (BIGINT, Primary Key, Identity)
+- `area_name` (VARCHAR(100), Nullable = false)
+- `district` (VARCHAR(100), Nullable = false)
+- Unique constraint `uq_area_name_district` on (`area_name`, `district`).
+- *Note: no create/update endpoint exists yet — rows must currently be seeded manually. `GET /api/areas` returns an empty list until then, and the Assign Officers screen shows "No areas exist yet".*
 
 ### `fertilizer_batches` Table
 Mapped by `FertilizerBatchEntity.java`. Represents supply chain fertilizer batch records synced after blockchain transaction minting.
@@ -122,6 +149,21 @@ Mapped by `DistributionLogEntity.java`. Records physical handover of fertilizer 
 - `amount_dispensed_kg` (INTEGER, Nullable = false)
 - `burn_transaction_hash` (VARCHAR, Unique, Nullable = false) — Cryptographic proof of the Polygon token burn; also used to reject duplicate/replayed handover calls.
 - `created_at` (TIMESTAMP, Updatable = false, set automatically via `@PrePersist`).
+
+### `fertilizer_requests` Table
+Mapped by `FertilizerRequestEntity.java`. A farmer's subsidy request and its review by the agrarian service officer of that farmer's area.
+- `request_id` (BIGINT, Primary Key, Identity)
+- `farmer_id` (BIGINT, Foreign Key referencing `users.user_id`, Nullable = false) — a real `@ManyToOne`, because the officer queue is scoped by `farmer -> area`.
+- `season` (VARCHAR(50), Nullable = false) — e.g. `"Maha 2025/2026"`, `"Yala 2026"`.
+- `fertilizer_type` (VARCHAR, Nullable = false)
+- `requested_kg` (INTEGER, Nullable = false)
+- `approved_kg` (INTEGER, Nullable) — null until reviewed; may be below `requested_kg` on a partial approval.
+- `status` (VARCHAR(20), Nullable = false, `@Enumerated(EnumType.STRING)`) — `RequestStatus`: `PENDING`, `APPROVED`, `REJECTED`, `COLLECTED`. Defaults to `PENDING`.
+- `reviewed_by_officer_id` (BIGINT, Foreign Key referencing `users.user_id`, Nullable)
+- `reviewed_at` (TIMESTAMP, Nullable)
+- `batch_id` (BIGINT, Nullable), `sack_serial` (VARCHAR, Nullable), `burn_tx_hash` (VARCHAR, Unique, Nullable), `collected_at` (TIMESTAMP, Nullable) — collection fields. **No endpoint writes these yet**; collection still runs through `POST /api/v1/distributions`, and `COLLECTED` is therefore currently unreachable.
+- `created_at` (TIMESTAMP, Updatable = false, `@PrePersist`)
+- *Note: a farmer may hold only one `PENDING` request per (season, fertilizer_type); a rejected one can be re-filed.*
 
 ### `user_quotas` Table
 Mapped by `UserQuotaEntity.java`. Tracks each farmer's remaining fertilizer allowance per fertilizer type.
@@ -161,6 +203,55 @@ Mapped by `UserQuotaEntity.java`. Tracks each farmer's remaining fertilizer allo
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
 | `POST` | `/api/v1/distributions` | Record a farmer handover (deducts batch volume + farmer quota, logs the token burn) | `HandoverRequestDTO` | `DistributionResponseDTO` | No (JWT Required) |
+
+### Users (`/api/users`)
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/users/me/wallet` | The authenticated user's linked wallet address (null if never connected) | None | `WalletAddressResponseDTO` | No (JWT, any role) |
+| `PATCH` | `/api/users/me/wallet` | Link the connected wallet to the authenticated user. Lowercased before the uniqueness check; 409 if another account already holds it | `UpdateWalletAddressRequestDTO` | `WalletAddressResponseDTO` | No (JWT, any role) |
+
+> Called automatically by the frontend's `useWalletAddressSync` hook (mounted in
+> `app/(ui)/layout.tsx`) the first time thirdweb reports a connected address, so
+> `users.wallet_address` is populated without a manual step. Re-sending the same
+> address is a no-op; connecting a different wallet replaces the stored one.
+
+### Areas (`/api/areas`)
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/areas` | List all areas, ordered by district then area name | None | `List<AreaResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+
+### Officers (`/api/officers`)
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/officers` | List users holding `AGRARIAN_SERVICE_OFFICER`, with their current area. Optional `?assigned=true\|false` filter; omitted returns all | None | `List<OfficerResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `POST` | `/api/officers/assign` | Assign an officer to an area (sets `users.area_id` + `users.is_assigned`). Re-assigning moves the officer rather than failing | `AssignOfficerRequestDTO` | `OfficerResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+
+### Fertilizer Requests (`/api/fertilizer-requests`)
+
+The farmer and officer identities come from the JWT principal, never the payload — neither `farmer_id` nor `reviewed_by_officer_id` is client-supplied.
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `POST` | `/api/fertilizer-requests` | Raise a request for the authenticated farmer | `FertilizerRequestCreateDTO` | `FertilizerRequestResponseDTO` (201) | No (JWT + `FARMER`) |
+| `GET` | `/api/fertilizer-requests/me` | The authenticated farmer's own requests, newest first | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `FARMER`) |
+| `GET` | `/api/fertilizer-requests/pending` | Review queue: pending requests from farmers in the authenticated officer's area, **oldest first** (FIFO) | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `GET` | `/api/fertilizer-requests/area` | Area history: every request from farmers in the officer's area, **newest first**, whoever reviewed it. Optional `?status=PENDING\|APPROVED\|REJECTED\|COLLECTED`; omitted returns all | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `PATCH` | `/api/fertilizer-requests/{requestId}/review` | Approve or reject a pending request | `FertilizerRequestReviewDTO` | `FertilizerRequestResponseDTO` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+
+Review rules enforced in `FertilizerRequestService`:
+- The request must still be `PENDING` (409 otherwise).
+- The officer's `area_id` must equal the farmer's `area_id` (403 otherwise) — this is what "approved by the officer in that area" means in code.
+- `status` must be `APPROVED` or `REJECTED`; `approved_kg` is required on approve, must be ≤ `requested_kg`, and is cleared on reject.
+- A farmer with no `area_id` cannot raise a request at all (400) — nobody would be able to review it.
+
+> These are the first endpoints in the codebase to enforce a role. They rely on
+> `@PreAuthorize` + the `@EnableMethodSecurity` already set on `SecurityConfig`;
+> `JwtAuthFilter` supplies the `ROLE_<name>` authority from the token's `role`
+> claim. `SecurityConfig.authorizeHttpRequests` needs no change — they are
+> covered by the existing `anyRequest().authenticated()`.
 
 ---
 
