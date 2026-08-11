@@ -183,6 +183,7 @@ public class FertilizerRequestService {
                 .fertilizerType(entity.getFertilizerType())
                 .requestedKg(entity.getRequestedKg())
                 .approvedKg(entity.getApprovedKg())
+                .collectedKg(entity.getCollectedKg() == null ? 0 : entity.getCollectedKg())
                 .status(entity.getStatus())
                 .reviewedByOfficerId(reviewer != null ? reviewer.getUserId() : null)
                 .reviewedByOfficerUsername(reviewer != null ? reviewer.getUsername() : null)

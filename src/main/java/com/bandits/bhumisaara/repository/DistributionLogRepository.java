@@ -4,8 +4,17 @@ import com.bandits.bhumisaara.entity.DistributionLogEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
+
 @Repository
 public interface DistributionLogRepository extends JpaRepository<DistributionLogEntity, Long> {
 
     boolean existsByBurnTransactionHash(String burnTransactionHash);
+
+    /** History reads newest-first for every audience. */
+    List<DistributionLogEntity> findAllByOrderByCreatedAtDesc();
+
+    List<DistributionLogEntity> findByOfficerIdOrderByCreatedAtDesc(Long officerId);
+
+    List<DistributionLogEntity> findByFarmerIdOrderByCreatedAtDesc(Long farmerId);
 }

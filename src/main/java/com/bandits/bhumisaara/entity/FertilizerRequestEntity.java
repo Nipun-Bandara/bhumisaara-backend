@@ -3,6 +3,7 @@ package com.bandits.bhumisaara.entity;
 import com.bandits.bhumisaara.enums.RequestStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.ColumnDefault;
 
 import java.time.LocalDateTime;
 
@@ -38,6 +39,19 @@ public class FertilizerRequestEntity {
     // Null until reviewed; may be lower than requestedKg on partial approval.
     @Column(name = "approved_kg")
     private Integer approvedKg;
+
+    /**
+     * How much of {@link #approvedKg} the farmer has physically collected. The
+     * ceiling every handover is checked against — a farmer approved for 50kg
+     * cannot walk away with two 50kg sacks across two visits.
+     * <p>
+     * {@code @ColumnDefault} matters under {@code ddl-auto: update}: without it
+     * the NOT NULL column can't be added to a table that already holds rows.
+     */
+    @Builder.Default
+    @ColumnDefault("0")
+    @Column(name = "collected_kg", nullable = false)
+    private Integer collectedKg = 0;
 
     @Builder.Default
     @Enumerated(EnumType.STRING)

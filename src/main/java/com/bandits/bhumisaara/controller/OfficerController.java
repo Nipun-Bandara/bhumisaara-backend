@@ -24,6 +24,16 @@ public class OfficerController {
 
     private final OfficerService officerService;
 
+    /** The calling officer's own profile + assigned area. */
+    @GetMapping("/me")
+    @PreAuthorize("hasRole('AGRARIAN_SERVICE_OFFICER')")
+    public ResponseEntity<OfficerResponseDTO> getMyProfile() {
+        return ResponseEntity
+                .ok()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(officerService.getMyProfile());
+    }
+
     @GetMapping
     @PreAuthorize("hasAnyRole('GOVERNMENT_ADMIN', 'SYSTEM_ADMIN')")
     public ResponseEntity<List<OfficerResponseDTO>> getOfficers(

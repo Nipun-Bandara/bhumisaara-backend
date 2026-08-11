@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 public class FertilizerBatchService {
 
     private final FertilizerBatchRepository batchRepository;
+    private final SackService sackService;
 
     @Transactional
     public BatchResponseDTO createBatch(BatchRequestDTO request) {
@@ -37,6 +38,12 @@ public class FertilizerBatchService {
                 .build();
 
         FertilizerBatchEntity savedEntity = batchRepository.save(entity);
+
+        // Physical sacks are created with the batch, inside the same
+        // transaction: a batch with no sacks could never be handed over, and
+        // the labels have to be printable straight after the mint.
+        sackService.generateSacksForBatch(savedEntity);
+
         return mapToDTO(savedEntity);
     }
 

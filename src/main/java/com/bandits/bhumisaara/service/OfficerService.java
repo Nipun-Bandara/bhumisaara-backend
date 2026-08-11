@@ -7,6 +7,7 @@ import com.bandits.bhumisaara.entity.UserEntity;
 import com.bandits.bhumisaara.enums.Role;
 import com.bandits.bhumisaara.repository.AreaRepository;
 import com.bandits.bhumisaara.repository.UserRepository;
+import com.bandits.bhumisaara.security.CurrentUserProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +23,16 @@ public class OfficerService {
 
     private final UserRepository userRepository;
     private final AreaRepository areaRepository;
+    private final CurrentUserProvider currentUserProvider;
+
+    /**
+     * The calling officer's own profile, including the area they serve — the
+     * officer screens name their centre from this rather than hardcoding it.
+     */
+    @Transactional(readOnly = true)
+    public OfficerResponseDTO getMyProfile() {
+        return mapToDTO(currentUserProvider.require());
+    }
 
     /**
      * Lists every user holding the AGRARIAN_SERVICE_OFFICER role.

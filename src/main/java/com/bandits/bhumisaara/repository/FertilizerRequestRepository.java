@@ -3,8 +3,11 @@ package com.bandits.bhumisaara.repository;
 import com.bandits.bhumisaara.entity.FertilizerRequestEntity;
 import com.bandits.bhumisaara.enums.RequestStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 
 @Repository
@@ -28,6 +31,37 @@ public interface FertilizerRequestRepository extends JpaRepository<FertilizerReq
     List<FertilizerRequestEntity> findByStatusAndFarmer_Area_AreaIdOrderByCreatedAtDesc(
             RequestStatus status, Long areaId);
 
+    /**
+     * The officer's collection queue. Oldest first, like the review queue —
+     * whoever was approved first should be served first.
+     */
+    List<FertilizerRequestEntity> findByStatusInAndFarmer_Area_AreaIdOrderByReviewedAtAsc(
+            Collection<RequestStatus> statuses, Long areaId);
+
     boolean existsByFarmer_UserIdAndSeasonAndFertilizerTypeAndStatus(
             Long farmerId, String season, String fertilizerType, RequestStatus status);
+
+    /**
+     * Demand per area and fertilizer type: how much officers have been told to
+     * hand out. Only requests that reached an approval decision count, and the
+     * approved amount is what matters — the requested amount was never promised.
+     * Farmers with no area are excluded; nobody could deliver to them.
+     */
+    @Query("SELECT r.farmer.area.areaId AS areaId, "
+            + "r.fertilizerType AS fertilizerType, "
+            + "SUM(r.approvedKg) AS approvedKg "
+            + "FROM FertilizerRequestEntity r "
+            + "WHERE r.status IN :statuses AND r.approvedKg IS NOT NULL AND r.farmer.area IS NOT NULL "
+            + "GROUP BY r.farmer.area.areaId, r.fertilizerType")
+    List<AreaDemandAggregate> sumApprovedKgByAreaAndType(
+            @Param("statuses") Collection<RequestStatus> statuses);
+
+    /** Projection for {@link #sumApprovedKgByAreaAndType(Collection)}. */
+    interface AreaDemandAggregate {
+        Long getAreaId();
+
+        String getFertilizerType();
+
+        Long getApprovedKg();
+    }
 }

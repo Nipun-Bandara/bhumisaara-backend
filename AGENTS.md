@@ -28,6 +28,8 @@ src/main/java/com/bandits/bhumisaara/
 ├── controller/                     # REST API Controllers
 │   ├── AreaController.java         # Area lookup endpoints
 │   ├── AuthController.java         # Authentication & Token validation endpoints
+│   ├── BatchTransferController.java # Admin → officer area demand, transfers & history
+│   ├── SackController.java         # Sack listing (label sheet) & backfill
 │   ├── FertilizerBatchController.java # Fertilizer batch minting & querying endpoints
 │   ├── FertilizerRequestController.java # Farmer subsidy requests & officer review
 │   ├── OfficerController.java      # Officer listing & area-assignment endpoints
@@ -41,10 +43,17 @@ src/main/java/com/bandits/bhumisaara/
 │   │   ├── HandoverRequestDTO.java
 │   │   ├── LoginRequest.java
 │   │   ├── RefreshTokenRequest.java
-│   │   └── RegisterRequest.java
+│   │   ├── RegisterRequest.java
+│   │   ├── SackValidationRequestDTO.java
+│   │   └── TransferRequestDTO.java
 │   └── response/                   # Outgoing API response DTOs
+│       ├── AreaDemandResponseDTO.java
 │       ├── AreaResponseDTO.java
 │       ├── AuthResponse.java
+│       ├── PendingCollectionResponseDTO.java
+│       ├── SackResponseDTO.java
+│       ├── SackValidationResponseDTO.java
+│       ├── TransferResponseDTO.java
 │       ├── BatchResponseDTO.java
 │       ├── DistributionResponseDTO.java
 │       ├── ErrorResponse.java
@@ -53,6 +62,9 @@ src/main/java/com/bandits/bhumisaara/
 │       └── TokenValidationResponse.java
 ├── entity/                         # JPA Database Entities
 │   ├── AreaEntity.java
+│   ├── BatchTransferEntity.java
+│   ├── HandoverSackEntity.java
+│   ├── SackEntity.java
 │   ├── DistributionLogEntity.java
 │   ├── FertilizerBatchEntity.java
 │   ├── FertilizerRequestEntity.java
@@ -61,13 +73,17 @@ src/main/java/com/bandits/bhumisaara/
 │   └── UserQuotaEntity.java
 ├── enums/                          # System Enums
 │   ├── RequestStatus.java
-│   └── Role.java
+│   ├── Role.java
+│   └── SackStatus.java
 ├── exception/                      # Global Exception Handlers & Custom Exceptions
 │   ├── AccountBannedException.java
 │   ├── GlobalExceptionHandler.java
 │   └── InvalidTokenException.java
 ├── repository/                     # Spring Data JPA Repositories
 │   ├── AreaRepository.java
+│   ├── BatchTransferRepository.java
+│   ├── HandoverSackRepository.java
+│   ├── SackRepository.java
 │   ├── DistributionLogRepository.java
 │   ├── FertilizerBatchRepository.java
 │   ├── FertilizerRequestRepository.java
@@ -81,6 +97,8 @@ src/main/java/com/bandits/bhumisaara/
 └── service/                        # Business Logic Layer
     ├── AreaService.java
     ├── AuthService.java
+    ├── BatchTransferService.java
+    ├── SackService.java
     ├── DistributionService.java
     ├── FertilizerBatchService.java
     ├── FertilizerRequestService.java
@@ -139,6 +157,29 @@ Mapped by `FertilizerBatchEntity.java`. Represents supply chain fertilizer batch
 - `minted_by_user_id` (BIGINT, Nullable = false) — References Government Admin user ID.
 - `created_at` (TIMESTAMP, Updatable = false, set automatically via `@PrePersist`).
 
+### `sacks` Table
+Mapped by `SackEntity.java`. The physical, individually labelled sacks a batch is broken into. Created automatically inside the `POST /api/batches` transaction — a batch never exists without its sacks.
+- `sack_id` (BIGINT, Primary Key, Identity)
+- `batch_id` (BIGINT, Nullable = false) — References `fertilizer_batches.batch_id`.
+- `serial` (VARCHAR(32), Unique, Nullable = false) — printed on the sack and scanned in the field, formatted `XXXX-XXXX-XXXX`. **Never sequential**: 12 random uppercase alphanumerics from `SecureRandom`, re-rolled if the candidate is already taken (`SackService.generateUniqueSerial`). A guessable serial would let anyone print a label that scans as genuine.
+- `weight_kg` (INTEGER, Nullable = false) — 50kg per sack; the final sack of a batch carries the remainder when `volume_kg` isn't divisible by 50.
+- `status` (VARCHAR(20), Nullable = false, `@Enumerated(EnumType.STRING)`) — `SackStatus`: `AT_CENTRAL`, `WITH_OFFICER`, `DELIVERED`. Starts `AT_CENTRAL`.
+- `held_by_user_id` (BIGINT, Nullable) — current custodian; set to the minting admin on creation, reassigned to the officer on transfer.
+- `created_at` (TIMESTAMP, Updatable = false, `@PrePersist`)
+- *Note: a single mint may not produce more than 5 000 sacks (`SackService.MAX_SACKS_PER_BATCH`, ≈250 tonnes).*
+
+### `batch_transfers` Table
+Mapped by `BatchTransferEntity.java`. A government admin → agrarian service officer stock movement, proven by an ERC-1155 `safeTransferFrom` on Polygon.
+- `transfer_id` (BIGINT, Primary Key, Identity)
+- `batch_id` (BIGINT, Nullable = false) — References `fertilizer_batches.batch_id`.
+- `token_id` (VARCHAR, Nullable = false) — stored as `String` per the `tokenId` convention in §7.
+- `from_user_id` (BIGINT, Nullable = false) — the sending government admin, taken from the JWT and never from the payload.
+- `to_officer_id` (BIGINT, Nullable = false) — References `users.user_id`.
+- `amount_kg` (INTEGER, Nullable = false)
+- `transaction_hash` (VARCHAR, Unique, Nullable = false) — also the replay guard against a double-submitted transfer.
+- `created_at` (TIMESTAMP, Updatable = false, `@PrePersist`)
+- *Note: a transfer moves custody, it does not consume stock, so it deliberately never touches `fertilizer_batches.volume_kg` — only the sacks change hands. Volume is deducted when a farmer collects (`POST /api/v1/distributions`).*
+
 ### `distribution_logs` Table
 Mapped by `DistributionLogEntity.java`. Records physical handover of fertilizer to a farmer and the corresponding blockchain token burn.
 - `distribution_id` (BIGINT, Primary Key, Identity)
@@ -146,9 +187,23 @@ Mapped by `DistributionLogEntity.java`. Records physical handover of fertilizer 
 - `batch_id` (BIGINT, Nullable = false) — References `fertilizer_batches.batch_id`.
 - `farmer_id` (BIGINT, Nullable = false) — References `users.user_id`.
 - `officer_id` (BIGINT, Nullable = false) — References `users.user_id` (Agrarian Extension Officer who performed the handover).
+- `request_id` (BIGINT, Nullable) — the approved `fertilizer_requests` row this handover fulfilled. Nullable only because rows written before requests were linked have nothing to point at; every new row sets it.
 - `amount_dispensed_kg` (INTEGER, Nullable = false)
 - `burn_transaction_hash` (VARCHAR, Unique, Nullable = false) — Cryptographic proof of the Polygon token burn; also used to reject duplicate/replayed handover calls.
+- `disputed` (BOOLEAN, Nullable = false, `@ColumnDefault("false")`), `disputed_at` (TIMESTAMP, Nullable) — the farmer's "I did not receive this" flag. Raising it reverses nothing; the tokens are burned and the sacks consumed, so it marks the record for a human.
 - `created_at` (TIMESTAMP, Updatable = false, set automatically via `@PrePersist`).
+
+> **Why `@ColumnDefault` matters here:** under `ddl-auto: update` Hibernate adds a
+> column with a bare `ALTER TABLE`, which fails on a NOT NULL column if the table
+> already holds rows. `disputed` and `fertilizer_requests.collected_kg` therefore
+> carry an explicit default so the migration succeeds against a populated dev DB.
+
+### `handover_sacks` Table
+Mapped by `HandoverSackEntity.java`. The sacks that backed one handover to a farmer.
+- `id` (BIGINT, Primary Key, Identity)
+- `distribution_id` (BIGINT, Nullable = false) — References `distribution_logs.distribution_id`.
+- `sack_serial` (VARCHAR(32), **Unique**, Nullable = false) — the consume-once guarantee: a physical sack can back exactly one handover, ever. Enforced by the database, not just the service, so a replayed or concurrent request cannot spend the same sack twice.
+- `weight_kg` (INTEGER, Nullable = false)
 
 ### `fertilizer_requests` Table
 Mapped by `FertilizerRequestEntity.java`. A farmer's subsidy request and its review by the agrarian service officer of that farmer's area.
@@ -158,10 +213,12 @@ Mapped by `FertilizerRequestEntity.java`. A farmer's subsidy request and its rev
 - `fertilizer_type` (VARCHAR, Nullable = false)
 - `requested_kg` (INTEGER, Nullable = false)
 - `approved_kg` (INTEGER, Nullable) — null until reviewed; may be below `requested_kg` on a partial approval.
-- `status` (VARCHAR(20), Nullable = false, `@Enumerated(EnumType.STRING)`) — `RequestStatus`: `PENDING`, `APPROVED`, `REJECTED`, `COLLECTED`. Defaults to `PENDING`.
+- `collected_kg` (INTEGER, Nullable = false, `@ColumnDefault("0")`) — how much of `approved_kg` the farmer has physically collected. The ceiling every handover is checked against: a farmer approved for 50kg cannot walk away with two 50kg sacks across two visits.
+- `status` (VARCHAR(20), Nullable = false, `@Enumerated(EnumType.STRING)`) — `RequestStatus`: `PENDING`, `APPROVED`, `REJECTED`, `PARTIALLY_COLLECTED`, `COLLECTED`. Defaults to `PENDING`. The handover flow sets `PARTIALLY_COLLECTED` while `collected_kg < approved_kg` and `COLLECTED` once it reaches it.
 - `reviewed_by_officer_id` (BIGINT, Foreign Key referencing `users.user_id`, Nullable)
 - `reviewed_at` (TIMESTAMP, Nullable)
-- `batch_id` (BIGINT, Nullable), `sack_serial` (VARCHAR, Nullable), `burn_tx_hash` (VARCHAR, Unique, Nullable), `collected_at` (TIMESTAMP, Nullable) — collection fields. **No endpoint writes these yet**; collection still runs through `POST /api/v1/distributions`, and `COLLECTED` is therefore currently unreachable.
+- `batch_id` (BIGINT, Nullable), `sack_serial` (VARCHAR, Nullable), `burn_tx_hash` (VARCHAR, Unique, Nullable) — legacy single-sack collection fields, superseded by `distribution_logs` + `handover_sacks`, which handle several sacks and several visits per request. Nothing writes them; don't add new readers.
+- `collected_at` (TIMESTAMP, Nullable) — set on the first handover against the request.
 - `created_at` (TIMESTAMP, Updatable = false, `@PrePersist`)
 - *Note: a farmer may hold only one `PENDING` request per (season, fertilizer_type); a rejected one can be re-filed.*
 
@@ -193,16 +250,84 @@ Mapped by `UserQuotaEntity.java`. Tracks each farmer's remaining fertilizer allo
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `POST` | `/api/batches` | Record new minted fertilizer batch | `BatchRequestDTO` | `BatchResponseDTO` | Yes (Configurable in SecurityConfig) |
-| `GET` | `/api/batches` | List all recorded batches | None | `List<BatchResponseDTO>` | Yes |
-| `GET` | `/api/batches/{batchId}` | Get batch details by database ID | None | `BatchResponseDTO` | Yes |
-| `GET` | `/api/batches/token/{tokenId}` | Get batch details by blockchain token ID | None | `BatchResponseDTO` | Yes |
+| `POST` | `/api/batches` | Record new minted fertilizer batch **and generate its 50kg sacks** | `BatchRequestDTO` | `BatchResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`) |
+| `GET` | `/api/batches` | List all recorded batches | None | `List<BatchResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`/`AGRARIAN_SERVICE_OFFICER`) |
+| `GET` | `/api/batches/{batchId}` | Get batch details by database ID | None | `BatchResponseDTO` | No (same three roles) |
+| `GET` | `/api/batches/token/{tokenId}` | Get batch details by blockchain token ID | None | `BatchResponseDTO` | No (same three roles) |
 
-### Distributions (`/api/v1/distributions`)
+> Reads stay open to `AGRARIAN_SERVICE_OFFICER` because the officer handover
+> screen picks the batch it dispenses from out of `GET /api/batches`; locking
+> reads to the admin would break that flow.
+
+### Sacks (`/api/v1/sacks`)
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `POST` | `/api/v1/distributions` | Record a farmer handover (deducts batch volume + farmer quota, logs the token burn) | `HandoverRequestDTO` | `DistributionResponseDTO` | No (JWT Required) |
+| `GET` | `/api/v1/sacks/batch/{batchId}` | Every sack of one batch, in label order (drives the printable label sheet) | None | `List<SackResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`) |
+| `POST` | `/api/v1/sacks/backfill/{batchId}` | Generate sacks for a batch minted before sacks existed. Idempotent — a batch that already has sacks is returned untouched | None | `List<SackResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`) |
+
+### Batch Transfers (`/api/v1/transfers`)
+
+The sending admin comes from the JWT principal, never the payload.
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/transfers/demand` | Distribution queue: one row per (area, fertilizer type) with approved demand, largest shortfall first | None | `List<AreaDemandResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`) |
+| `POST` | `/api/v1/transfers` | Record a confirmed on-chain transfer and move the scanned sacks into the officer's custody | `TransferRequestDTO` | `TransferResponseDTO` (201) | No (JWT + `GOVERNMENT_ADMIN`) |
+| `GET` | `/api/v1/transfers` | Admin transfer history, newest first | None | `List<TransferResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`) |
+
+Demand maths in `BatchTransferService.getAreaDemand()`:
+- `approvedKg` sums `fertilizer_requests.approved_kg` where `status IN ('APPROVED','COLLECTED')`, grouped by the **farmer's** area and fertilizer type. `COLLECTED` still counts — it was fulfilled from stock the officer was sent, and dropping it would make a settled area look under-supplied and invite a second delivery.
+- `transferredKg` sums `batch_transfers.amount_kg` already sent to that area's officer for that fertilizer type (the type lives on the batch, so it's an ad-hoc join).
+- `outstandingKg` is `max(0, approved − transferred)`.
+- The officer is **resolved from the area**, never chosen by the admin — one serving officer per area, lowest `user_id` wins if several share one. An area with demand but no officer still appears, with `officerId`/`officerWallet` null so the UI can disable the row.
+
+Validations enforced in `recordTransfer` (one `@Transactional` method):
+- duplicate `transaction_hash` → 409 (replay guard);
+- every serial must exist, belong to `batchId`, and still be `AT_CENTRAL` (duplicates in the list are collapsed);
+- the sack weights must sum **exactly** to `amountKg`;
+- `toOfficerId` must hold `AGRARIAN_SERVICE_OFFICER` **and** have a `wallet_address`.
+
+### Distributions (`/api/v1/distributions`)
+
+The officer → farmer handover. **The tokens are burned straight from the officer's
+own wallet — they are never transferred to the farmer first.** The farmer is the
+recipient of record in Postgres and the burn is the on-chain proof the stock left
+circulation. One transaction, no transfer step. Do not add one.
+
+The acting officer always comes from the JWT, and the farmer from the request
+being fulfilled — neither is client-supplied.
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/distributions/pending` | The officer's collection queue: approved requests from farmers in **their own area** that still have stock owed | None | `List<PendingCollectionResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `POST` | `/api/v1/distributions/validate-sack` | Pre-flight check on a scanned sack, with the exact rejection reason | `SackValidationRequestDTO` | `SackValidationResponseDTO` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `POST` | `/api/v1/distributions` | Record a handover whose burn already confirmed: consumes the sacks, advances the request, deducts batch volume | `HandoverRequestDTO` | `DistributionResponseDTO` (201) | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `GET` | `/api/v1/distributions/officer` | Handovers the calling officer performed, newest first | None | `List<DistributionResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `GET` | `/api/v1/distributions/farmer` | Handovers the calling farmer received, newest first | None | `List<DistributionResponseDTO>` | No (JWT + `FARMER`) |
+| `POST` | `/api/v1/distributions/{id}/dispute` | "I did not receive this" — flags the record, reverses nothing. Only the farmer named on it may raise it | None | `DistributionResponseDTO` | No (JWT + `FARMER`) |
+
+Sack rules, applied in `validateSack` **and re-run inside `recordHandover`** — a
+client that skipped validation (or lied about `alreadyScannedKg`) must not get
+further. Each has its own message:
+- the serial must exist;
+- its status must be `WITH_OFFICER` (a `DELIVERED` sack says so; an `AT_CENTRAL` one says it was never transferred to you);
+- `held_by_user_id` must be the calling officer;
+- it must not already appear in `handover_sacks` (consume-once);
+- `alreadyScannedKg + weight` must not exceed `approved_kg - collected_kg` — the quota ceiling, named in the message.
+
+`recordHandover` additionally, in one `@Transactional`:
+- rejects a duplicate `burn_transaction_hash` (replay guard);
+- verifies the request's farmer is in the officer's area;
+- verifies sack weights sum **exactly** to `amount_dispensed_kg`, and that every sack belongs to the burned batch;
+- verifies `farmerWallet` matches the farmer's stored `wallet_address` (case-insensitive);
+- writes `distribution_logs` + `handover_sacks`, sets those sacks to `DELIVERED` held by the farmer;
+- increments `collected_kg` and moves the request to `PARTIALLY_COLLECTED` / `COLLECTED`;
+- **deducts `fertilizer_batches.volume_kg`** — the burn destroyed the stock, so unlike the admin → officer transfer this deduction is correct here.
+
+> The pre-handover quota check against `user_quotas` was removed: `approved_kg`
+> on the request is now the ceiling, and it is enforced per-visit through
+> `collected_kg`. `user_quotas` is unseeded and was rejecting every handover.
 
 ### Users (`/api/users`)
 

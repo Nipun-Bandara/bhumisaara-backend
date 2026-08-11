@@ -32,6 +32,9 @@ public class FertilizerRequestResponseDTO {
 
     private Integer approvedKg;
 
+    /** How much of {@code approvedKg} has physically been handed over so far. */
+    private Integer collectedKg;
+
     private RequestStatus status;
 
     private Long reviewedByOfficerId;
