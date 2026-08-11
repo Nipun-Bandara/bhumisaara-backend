@@ -6,4 +6,11 @@ spring:
 
 server:
   port: 8080
-
+  servlet:
+    # Every endpoint hangs off this prefix, so controllers map plain paths
+    # (`/batches`, `/auth/login`) and the API version lives in exactly one place.
+    #
+    # Two things read paths *below* the context path, not the full URI, so they
+    # must never repeat it: Spring Security's `requestMatchers` in SecurityConfig,
+    # and `JwtAuthFilter.shouldNotFilter`, which compares `getServletPath()`.
+    context-path: /api/v1

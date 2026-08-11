@@ -26,13 +26,20 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final UserRepository userRepository;
 
+    /**
+     * The endpoints that issue tokens must not be asked to verify one.
+     * <p>
+     * {@code getServletPath()} excludes {@code server.servlet.context-path}, so
+     * these are the plain paths — the same ones {@code SecurityConfig} permits.
+     * Keep the two lists in step.
+     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
-        return path.equals("/api/auth/validate") ||
-                path.equals("/api/auth/login") ||
-                path.equals("/api/auth/register") ||
-                path.equals("/api/auth/refresh");
+        return path.equals("/auth/validate") ||
+                path.equals("/auth/login") ||
+                path.equals("/auth/register") ||
+                path.equals("/auth/refresh");
     }
 
     @Override

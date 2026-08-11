@@ -11,10 +11,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/auth")
 @RequiredArgsConstructor
 public class AuthController {
 
@@ -45,7 +46,10 @@ public class AuthController {
                 .body(authService.refreshToken(request));
     }
 
+    // register / login / refresh / validate are permitAll in SecurityConfig;
+    // /me is the one endpoint here that needs a session.
     @GetMapping("/me")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<AuthResponse> getCurrentUser() {
         return ResponseEntity
                 .ok()

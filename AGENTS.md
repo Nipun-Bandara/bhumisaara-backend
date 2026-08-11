@@ -11,7 +11,7 @@ Welcome to the **Bhumisaara Backend** repository. This document serves as the pr
 ### Technology Stack
 - **Language**: Java 17
 - **Framework**: Spring Boot 3.4.x / 4.x (`spring-boot-starter-web`, `spring-boot-starter-data-jpa`, `spring-boot-starter-security`, `spring-boot-starter-validation`)
-- **Database**: PostgreSQL (with MySQL runtime driver support)
+- **Database**: PostgreSQL (the unused MySQL runtime driver was removed)
 - **ORM / Persistence**: Hibernate / Spring Data JPA
 - **Security**: Spring Security + JSON Web Tokens (JJWT 0.11.5)
 - **Environment Management**: `me.paulschwarz:spring-dotenv` (loads `.env.development`, `.env.staging`, `.env.production`)
@@ -133,7 +133,7 @@ Mapped by `UserEntity.java`. Implements Spring Security `UserDetails`.
 - `password` (VARCHAR, Encrypted BCrypt, Nullable = false)
 - `wallet_address` (VARCHAR(42), Unique, Nullable) — EVM address, normalised to lowercase on persist/update; blank input collapses to `NULL` so the unique index isn't tripped by repeated `''`.
 - `role_id` (BIGINT, Foreign Key referencing `roles.role_id`)
-- `area_id` (BIGINT, Foreign Key referencing `areas.area_id`, Nullable) — set by `POST /api/officers/assign`.
+- `area_id` (BIGINT, Foreign Key referencing `areas.area_id`, Nullable) — set by `POST /api/v1/officers/assign`.
 - `is_banned` (BOOLEAN, Default: false)
 - `is_assigned` (BOOLEAN, Default: false) — set true when an officer is assigned to an area.
 - `created_at` (TIMESTAMP, Updatable = false)
@@ -144,7 +144,7 @@ Mapped by `AreaEntity.java`. Geographic areas an agrarian service officer can be
 - `area_name` (VARCHAR(100), Nullable = false)
 - `district` (VARCHAR(100), Nullable = false)
 - Unique constraint `uq_area_name_district` on (`area_name`, `district`).
-- *Note: no create/update endpoint exists yet — rows must currently be seeded manually. `GET /api/areas` returns an empty list until then, and the Assign Officers screen shows "No areas exist yet".*
+- *Note: no create/update endpoint exists yet — rows must currently be seeded manually. `GET /api/v1/areas` returns an empty list until then, and the Assign Officers screen shows "No areas exist yet".*
 
 ### `fertilizer_batches` Table
 Mapped by `FertilizerBatchEntity.java`. Represents supply chain fertilizer batch records synced after blockchain transaction minting.
@@ -154,11 +154,11 @@ Mapped by `FertilizerBatchEntity.java`. Represents supply chain fertilizer batch
 - `importer_name` (VARCHAR, Nullable = false)
 - `fertilizer_type` (VARCHAR, Nullable = false)
 - `volume_kg` (INTEGER, Nullable = false)
-- `minted_by_user_id` (BIGINT, Nullable = false) — References Government Admin user ID.
+- `minted_by_user_id` (BIGINT, Nullable = false) — the minting Government Admin, **taken from the JWT**, never from the request body.
 - `created_at` (TIMESTAMP, Updatable = false, set automatically via `@PrePersist`).
 
 ### `sacks` Table
-Mapped by `SackEntity.java`. The physical, individually labelled sacks a batch is broken into. Created automatically inside the `POST /api/batches` transaction — a batch never exists without its sacks.
+Mapped by `SackEntity.java`. The physical, individually labelled sacks a batch is broken into. Created automatically inside the `POST /api/v1/batches` transaction — a batch never exists without its sacks.
 - `sack_id` (BIGINT, Primary Key, Identity)
 - `batch_id` (BIGINT, Nullable = false) — References `fertilizer_batches.batch_id`.
 - `serial` (VARCHAR(32), Unique, Nullable = false) — printed on the sack and scanned in the field, formatted `XXXX-XXXX-XXXX`. **Never sequential**: 12 random uppercase alphanumerics from `SecureRandom`, re-rolled if the candidate is already taken (`SackService.generateUniqueSerial`). A guessable serial would let anyone print a label that scans as genuine.
@@ -236,27 +236,39 @@ Mapped by `UserQuotaEntity.java`. Tracks each farmer's remaining fertilizer allo
 
 ## 4. REST API Documentation
 
-### Authentication (`/api/auth`)
+**The `/api/v1` prefix is a servlet context path, not something controllers
+repeat.** `application.yml` sets `server.servlet.context-path: /api/v1`, so
+`@RequestMapping` values are plain (`/batches`, `/auth`) and the tables below
+show the full external URL a client calls.
+
+Two things match the path **below** the context path and must never repeat it:
+- `SecurityConfig.authorizeHttpRequests` — Spring Security matches the path within the application, so the permitAll list is `/auth/login`, not `/api/v1/auth/login`;
+- `JwtAuthFilter.shouldNotFilter` — compares `request.getServletPath()`, which also excludes the context path. Keep it in step with the permitAll list.
+
+The frontend mirrors this: `NEXT_PUBLIC_API_URL` points at
+`http://localhost:8080/api/v1` and `utils/apiPaths.ts` entries are plain too.
+
+### Authentication (`/api/v1/auth`)
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `POST` | `/api/auth/register` | Register a new user | `RegisterRequest` | `AuthResponse` | Yes |
-| `POST` | `/api/auth/login` | Authenticate user & issue JWT | `LoginRequest` | `AuthResponse` | Yes |
-| `POST` | `/api/auth/refresh` | Refresh expired access token | `RefreshTokenRequest` | `AuthResponse` | Yes |
-| `GET` | `/api/auth/me` | Fetch authenticated user profile | None | `AuthResponse` | No (JWT Required) |
-| `GET` | `/api/auth/validate` | Validate JWT token string | Header or Query Param | `TokenValidationResponse` | Yes |
+| `POST` | `/api/v1/auth/register` | Register a new user | `RegisterRequest` | `AuthResponse` | Yes |
+| `POST` | `/api/v1/auth/login` | Authenticate user & issue JWT | `LoginRequest` | `AuthResponse` | Yes |
+| `POST` | `/api/v1/auth/refresh` | Refresh expired access token | `RefreshTokenRequest` | `AuthResponse` | Yes |
+| `GET` | `/api/v1/auth/me` | Fetch authenticated user profile | None | `AuthResponse` | No (JWT Required) |
+| `GET` | `/api/v1/auth/validate` | Validate JWT token string | Header or Query Param | `TokenValidationResponse` | Yes |
 
-### Fertilizer Batches (`/api/batches`)
+### Fertilizer Batches (`/api/v1/batches`)
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `POST` | `/api/batches` | Record new minted fertilizer batch **and generate its 50kg sacks** | `BatchRequestDTO` | `BatchResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`) |
-| `GET` | `/api/batches` | List all recorded batches | None | `List<BatchResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`/`AGRARIAN_SERVICE_OFFICER`) |
-| `GET` | `/api/batches/{batchId}` | Get batch details by database ID | None | `BatchResponseDTO` | No (same three roles) |
-| `GET` | `/api/batches/token/{tokenId}` | Get batch details by blockchain token ID | None | `BatchResponseDTO` | No (same three roles) |
+| `POST` | `/api/v1/batches` | Record new minted fertilizer batch **and generate its 50kg sacks** | `BatchRequestDTO` | `BatchResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`) |
+| `GET` | `/api/v1/batches` | List all recorded batches | None | `List<BatchResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`/`AGRARIAN_SERVICE_OFFICER`) |
+| `GET` | `/api/v1/batches/{batchId}` | Get batch details by database ID | None | `BatchResponseDTO` | No (same three roles) |
+| `GET` | `/api/v1/batches/token/{tokenId}` | Get batch details by blockchain token ID | None | `BatchResponseDTO` | No (same three roles) |
 
 > Reads stay open to `AGRARIAN_SERVICE_OFFICER` because the officer handover
-> screen picks the batch it dispenses from out of `GET /api/batches`; locking
+> screen picks the batch it dispenses from out of `GET /api/v1/batches`; locking
 > reads to the admin would break that flow.
 
 ### Sacks (`/api/v1/sacks`)
@@ -329,42 +341,42 @@ further. Each has its own message:
 > on the request is now the ceiling, and it is enforced per-visit through
 > `collected_kg`. `user_quotas` is unseeded and was rejecting every handover.
 
-### Users (`/api/users`)
+### Users (`/api/v1/users`)
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `GET` | `/api/users/me/wallet` | The authenticated user's linked wallet address (null if never connected) | None | `WalletAddressResponseDTO` | No (JWT, any role) |
-| `PATCH` | `/api/users/me/wallet` | Link the connected wallet to the authenticated user. Lowercased before the uniqueness check; 409 if another account already holds it | `UpdateWalletAddressRequestDTO` | `WalletAddressResponseDTO` | No (JWT, any role) |
+| `GET` | `/api/v1/users/me/wallet` | The authenticated user's linked wallet address (null if never connected) | None | `WalletAddressResponseDTO` | No (JWT, any role) |
+| `PATCH` | `/api/v1/users/me/wallet` | Link the connected wallet to the authenticated user. Lowercased before the uniqueness check; 409 if another account already holds it | `UpdateWalletAddressRequestDTO` | `WalletAddressResponseDTO` | No (JWT, any role) |
 
 > Called automatically by the frontend's `useWalletAddressSync` hook (mounted in
 > `app/(ui)/layout.tsx`) the first time thirdweb reports a connected address, so
 > `users.wallet_address` is populated without a manual step. Re-sending the same
 > address is a no-op; connecting a different wallet replaces the stored one.
 
-### Areas (`/api/areas`)
+### Areas (`/api/v1/areas`)
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `GET` | `/api/areas` | List all areas, ordered by district then area name | None | `List<AreaResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `GET` | `/api/v1/areas` | List all areas, ordered by district then area name | None | `List<AreaResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
 
-### Officers (`/api/officers`)
+### Officers (`/api/v1/officers`)
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `GET` | `/api/officers` | List users holding `AGRARIAN_SERVICE_OFFICER`, with their current area. Optional `?assigned=true\|false` filter; omitted returns all | None | `List<OfficerResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
-| `POST` | `/api/officers/assign` | Assign an officer to an area (sets `users.area_id` + `users.is_assigned`). Re-assigning moves the officer rather than failing | `AssignOfficerRequestDTO` | `OfficerResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `GET` | `/api/v1/officers` | List users holding `AGRARIAN_SERVICE_OFFICER`, with their current area. Optional `?assigned=true\|false` filter; omitted returns all | None | `List<OfficerResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `POST` | `/api/v1/officers/assign` | Assign an officer to an area (sets `users.area_id` + `users.is_assigned`). Re-assigning moves the officer rather than failing | `AssignOfficerRequestDTO` | `OfficerResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
 
-### Fertilizer Requests (`/api/fertilizer-requests`)
+### Fertilizer Requests (`/api/v1/fertilizer-requests`)
 
 The farmer and officer identities come from the JWT principal, never the payload — neither `farmer_id` nor `reviewed_by_officer_id` is client-supplied.
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `POST` | `/api/fertilizer-requests` | Raise a request for the authenticated farmer | `FertilizerRequestCreateDTO` | `FertilizerRequestResponseDTO` (201) | No (JWT + `FARMER`) |
-| `GET` | `/api/fertilizer-requests/me` | The authenticated farmer's own requests, newest first | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `FARMER`) |
-| `GET` | `/api/fertilizer-requests/pending` | Review queue: pending requests from farmers in the authenticated officer's area, **oldest first** (FIFO) | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
-| `GET` | `/api/fertilizer-requests/area` | Area history: every request from farmers in the officer's area, **newest first**, whoever reviewed it. Optional `?status=PENDING\|APPROVED\|REJECTED\|COLLECTED`; omitted returns all | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
-| `PATCH` | `/api/fertilizer-requests/{requestId}/review` | Approve or reject a pending request | `FertilizerRequestReviewDTO` | `FertilizerRequestResponseDTO` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `POST` | `/api/v1/fertilizer-requests` | Raise a request for the authenticated farmer | `FertilizerRequestCreateDTO` | `FertilizerRequestResponseDTO` (201) | No (JWT + `FARMER`) |
+| `GET` | `/api/v1/fertilizer-requests/me` | The authenticated farmer's own requests, newest first | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `FARMER`) |
+| `GET` | `/api/v1/fertilizer-requests/pending` | Review queue: pending requests from farmers in the authenticated officer's area, **oldest first** (FIFO) | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `GET` | `/api/v1/fertilizer-requests/area` | Area history: every request from farmers in the officer's area, **newest first**, whoever reviewed it. Optional `?status=PENDING\|APPROVED\|REJECTED\|COLLECTED`; omitted returns all | None | `List<FertilizerRequestResponseDTO>` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
+| `PATCH` | `/api/v1/fertilizer-requests/{requestId}/review` | Approve or reject a pending request | `FertilizerRequestReviewDTO` | `FertilizerRequestResponseDTO` | No (JWT + `AGRARIAN_SERVICE_OFFICER`) |
 
 Review rules enforced in `FertilizerRequestService`:
 - The request must still be `PENDING` (409 otherwise).
@@ -392,7 +404,10 @@ Review rules enforced in `FertilizerRequestService`:
    - Access denied actions trigger `403 Forbidden` with formatted JSON `ErrorResponse`.
 
 3. **Global Exception Handling**:
-   - `GlobalExceptionHandler.java` catches validation errors (`MethodArgumentNotValidException`, `ConstraintViolationException`), duplicate resource errors (`IllegalStateException`), and general errors, returning uniform `ErrorResponse` objects.
+   - `GlobalExceptionHandler.java` returns a uniform `ErrorResponse` for validation failures (`MethodArgumentNotValidException`, `ConstraintViolationException`), conflicts (`IllegalStateException`, `DataIntegrityViolationException`), bad input (`IllegalArgumentException`, `HttpMessageNotReadableException`, `MethodArgumentTypeMismatchException`, `MissingServletRequestParameterException`), routing mistakes (`HttpRequestMethodNotSupportedException` → 405, `NoResourceFoundException` → 404), and auth failures (`AccessDeniedException`, `UsernameNotFoundException`, `InvalidTokenException`, `AccountBannedException`).
+   - **500s never echo the exception message.** The cause is logged with its stack trace via SLF4J; the client gets a fixed sentence, because an unhandled exception's text can carry SQL and class names. Service-thrown 4xx messages *are* passed through — they are written for the user ("Sack … has already been used in an earlier handover").
+
+4. **Authorization**: every controller method carries an explicit `@PreAuthorize`. Endpoints open to all signed-in users use `@PreAuthorize("isAuthenticated()")` rather than no annotation, so a missing one always reads as a bug. The acting user is always resolved from the JWT through `CurrentUserProvider` — no endpoint accepts an actor id in its payload.
 
 ---
 

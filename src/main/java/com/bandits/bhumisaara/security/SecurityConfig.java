@@ -109,8 +109,11 @@ public class SecurityConfig {
                         }))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
-                        .requestMatchers("/api/auth/register", "/api/auth/login", "/api/auth/validate",
-                                "/api/auth/refresh")
+                        // Paths here are relative to server.servlet.context-path
+                        // (/api/v1) — Spring Security matches the path within the
+                        // application, so repeating the prefix would match nothing.
+                        .requestMatchers("/auth/register", "/auth/login",
+                                "/auth/validate", "/auth/refresh")
                         .permitAll()
                         .anyRequest().authenticated())
                 .sessionManagement(session -> session

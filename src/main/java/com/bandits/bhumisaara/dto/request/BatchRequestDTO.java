@@ -30,6 +30,6 @@ public class BatchRequestDTO {
     @Positive(message = "volume_kg must be greater than zero")
     private Integer volumeKg;
 
-    @NotNull(message = "minted_by_user_id is required")
-    private Long mintedByUserId;
+    // No mintedByUserId: the minting admin is resolved from the JWT. Accepting
+    // it here let any caller credit the mint — and the sacks — to another user.
 }

@@ -4,6 +4,7 @@ import com.bandits.bhumisaara.dto.request.BatchRequestDTO;
 import com.bandits.bhumisaara.dto.response.BatchResponseDTO;
 import com.bandits.bhumisaara.entity.FertilizerBatchEntity;
 import com.bandits.bhumisaara.repository.FertilizerBatchRepository;
+import com.bandits.bhumisaara.security.CurrentUserProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,6 +18,7 @@ public class FertilizerBatchService {
 
     private final FertilizerBatchRepository batchRepository;
     private final SackService sackService;
+    private final CurrentUserProvider currentUserProvider;
 
     @Transactional
     public BatchResponseDTO createBatch(BatchRequestDTO request) {
@@ -34,7 +36,9 @@ public class FertilizerBatchService {
                 .importerName(request.getImporterName())
                 .fertilizerType(request.getFertilizerType())
                 .volumeKg(request.getVolumeKg())
-                .mintedByUserId(request.getMintedByUserId())
+                // From the JWT, never the payload — this id also becomes the
+                // initial custodian of every sack in the batch.
+                .mintedByUserId(currentUserProvider.require().getUserId())
                 .build();
 
         FertilizerBatchEntity savedEntity = batchRepository.save(entity);
