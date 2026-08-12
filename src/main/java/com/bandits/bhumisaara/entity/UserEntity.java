@@ -35,6 +35,21 @@ public class UserEntity implements UserDetails {
     @Column(name = "wallet_address", length = 42, unique = true)
     private String walletAddress;
 
+    // ─── Profile details ─────────────────────────────────────────────────────
+    // All nullable: accounts exist before anyone fills a profile in, and adding
+    // a NOT NULL column to a populated table under ddl-auto: update would fail.
+    // `username` stays the login identity; `fullName` is the display name.
+
+    @Column(name = "full_name", length = 120)
+    private String fullName;
+
+    /** The farmer's home address, or the officer's agrarian centre. */
+    @Column(name = "address", length = 255)
+    private String address;
+
+    @Column(name = "contact_number", length = 20)
+    private String contactNumber;
+
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "area_id")
     private AreaEntity area;

@@ -45,12 +45,14 @@ src/main/java/com/bandits/bhumisaara/
 │   │   ├── RefreshTokenRequest.java
 │   │   ├── RegisterRequest.java
 │   │   ├── SackValidationRequestDTO.java
+│   │   ├── UpdateProfileRequestDTO.java
 │   │   └── TransferRequestDTO.java
 │   └── response/                   # Outgoing API response DTOs
 │       ├── AreaDemandResponseDTO.java
 │       ├── AreaResponseDTO.java
 │       ├── AuthResponse.java
 │       ├── PendingCollectionResponseDTO.java
+│       ├── ProfileResponseDTO.java
 │       ├── SackResponseDTO.java
 │       ├── SackValidationResponseDTO.java
 │       ├── TransferResponseDTO.java
@@ -132,6 +134,7 @@ Mapped by `UserEntity.java`. Implements Spring Security `UserDetails`.
 - `email` (VARCHAR, Unique, Nullable = false)
 - `password` (VARCHAR, Encrypted BCrypt, Nullable = false)
 - `wallet_address` (VARCHAR(42), Unique, Nullable) — EVM address, normalised to lowercase on persist/update; blank input collapses to `NULL` so the unique index isn't tripped by repeated `''`.
+- `full_name` (VARCHAR(120), Nullable), `address` (VARCHAR(255), Nullable), `contact_number` (VARCHAR(20), Nullable) — the editable profile, maintained by the user through `PUT /api/v1/users/me/profile`. All nullable: accounts exist before anyone fills a profile in. `username` stays the login identity; `full_name` is only a display name. `address` doubles as the officer's agrarian centre — same column, different label on screen.
 - `role_id` (BIGINT, Foreign Key referencing `roles.role_id`)
 - `area_id` (BIGINT, Foreign Key referencing `areas.area_id`, Nullable) — set by `POST /api/v1/officers/assign`.
 - `is_banned` (BOOLEAN, Default: false)
@@ -345,6 +348,8 @@ further. Each has its own message:
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
+| `GET` | `/api/v1/users/me/profile` | The signed-in user's own profile: identity, editable details, plus wallet and area read-only for context | None | `ProfileResponseDTO` | No (JWT, any role) |
+| `PUT` | `/api/v1/users/me/profile` | Replace the profile details (full name, address, contact number). PUT because the form submits all three together | `UpdateProfileRequestDTO` | `ProfileResponseDTO` | No (JWT, any role) |
 | `GET` | `/api/v1/users/me/wallet` | The authenticated user's linked wallet address (null if never connected) | None | `WalletAddressResponseDTO` | No (JWT, any role) |
 | `PATCH` | `/api/v1/users/me/wallet` | Link the connected wallet to the authenticated user. Lowercased before the uniqueness check; 409 if another account already holds it | `UpdateWalletAddressRequestDTO` | `WalletAddressResponseDTO` | No (JWT, any role) |
 
