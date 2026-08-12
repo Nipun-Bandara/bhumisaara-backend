@@ -15,6 +15,15 @@ Adding, removing, or changing auth on a controller endpoint touches three places
 2. The relevant API table in `AGENTS.md` §4
 3. The `Public?` column in that same table
 
+## The `/api/v1` prefix is a context path
+`application.yml` sets `server.servlet.context-path: /api/v1`. Controllers map
+plain paths (`@RequestMapping("/batches")`), and the prefix is added by the
+container. **Never repeat it** in:
+- `SecurityConfig` `requestMatchers` — matched below the context path;
+- `JwtAuthFilter.shouldNotFilter` — compares `getServletPath()`, also below it.
+Getting this wrong fails silently: the permitAll list stops matching and login
+starts returning 401.
+
 ## Repo-specific rules
 - `tokenId` is always `String`, never numeric (blockchain IDs like `"TK-0"`)
 - New entities/DTOs follow the package + suffix conventions in AGENTS.md §7 — don't ask, just follow them

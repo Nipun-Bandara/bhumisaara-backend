@@ -14,8 +14,6 @@ public interface FertilizerBatchRepository extends JpaRepository<FertilizerBatch
 
     Optional<FertilizerBatchEntity> findByTokenId(String tokenId);
 
-    Optional<FertilizerBatchEntity> findByTransactionHash(String transactionHash);
-
     Optional<FertilizerBatchEntity> findByTokenIdOrTransactionHash(String tokenId, String transactionHash);
 
     @Modifying

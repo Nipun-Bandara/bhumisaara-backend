@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/fertilizer-requests")
+@RequestMapping("/fertilizer-requests")
 @RequiredArgsConstructor
 public class FertilizerRequestController {
 
