@@ -56,6 +56,15 @@ public interface FertilizerRequestRepository extends JpaRepository<FertilizerReq
     List<AreaDemandAggregate> sumApprovedKgByAreaAndType(
             @Param("statuses") Collection<RequestStatus> statuses);
 
+    /**
+     * Every season farmers have ever filed a request for, newest first.
+     * <p>
+     * The subsidy credit screen offers these alongside the seasons already
+     * funded, so an admin picks from real seasons rather than typing one.
+     */
+    @Query("SELECT DISTINCT r.season FROM FertilizerRequestEntity r ORDER BY r.season DESC")
+    List<String> findDistinctSeasons();
+
     /** Projection for {@link #sumApprovedKgByAreaAndType(Collection)}. */
     interface AreaDemandAggregate {
         Long getAreaId();
