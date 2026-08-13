@@ -25,7 +25,13 @@ Welcome to the **Bhumisaara Backend** repository. This document serves as the pr
 ```
 src/main/java/com/bandits/bhumisaara/
 ├── BhumisaaraApplication.java      # Main application entry point
+├── config/                         # Application bootstrap
+│   └── DataSeeder.java             # First-boot roles, areas & the initial SYSTEM_ADMIN — see §8
 ├── controller/                     # REST API Controllers
+│   ├── AdminUserController.java    # SYSTEM_ADMIN: accounts, roles, areas, wallet clearing — §8
+│   ├── AdminAreaController.java    # SYSTEM_ADMIN: officer coverage & area CRUD
+│   ├── AdminAuditLogController.java # SYSTEM_ADMIN: the append-only audit trail (read-only)
+│   ├── AdminPlatformController.java # SYSTEM_ADMIN: wallet oversight & the health summary
 │   ├── AreaController.java         # Area lookup endpoints
 │   ├── AuthController.java         # Authentication & Token validation endpoints
 │   ├── BatchTransferController.java # Admin → officer area demand, transfers & history
@@ -67,6 +73,7 @@ src/main/java/com/bandits/bhumisaara/
 │       ├── OfficerResponseDTO.java
 │       └── TokenValidationResponse.java
 ├── entity/                         # JPA Database Entities
+│   ├── AdminAuditLogEntity.java    # Append-only. Never add an update or delete path — §8
 │   ├── AreaEntity.java
 │   ├── BatchTransferEntity.java
 │   ├── HandoverSackEntity.java
@@ -90,6 +97,7 @@ src/main/java/com/bandits/bhumisaara/
 │   ├── GlobalExceptionHandler.java
 │   └── InvalidTokenException.java
 ├── repository/                     # Spring Data JPA Repositories
+│   ├── AdminAuditLogRepository.java # Insert + read only, despite what JpaRepository inherits
 │   ├── AreaRepository.java
 │   ├── BatchTransferRepository.java
 │   ├── HandoverSackRepository.java
@@ -119,6 +127,11 @@ src/main/java/com/bandits/bhumisaara/
     ├── MarketOrderService.java     # Orders; only the farmer can complete one
     ├── RedemptionClaimService.java # Claims; the seller signs the settling burn
     ├── CreditOversightService.java # Reconciliation & seller anomaly flags
+    ├── AuditService.java           # THE only writer of admin_audit_logs. MANDATORY propagation
+    ├── AdminAuditQueryService.java # Reads the trail; kept apart from the writer on purpose
+    ├── AdminUserService.java       # Accounts, roles, officer areas, wallet clearing — §8
+    ├── AdminAreaService.java       # Officer coverage + area CRUD & soft deactivation
+    ├── AdminPlatformService.java   # Wallet oversight + the operational health summary
     └── impl/
         └── AuthServiceImpl.java
 ```
@@ -185,6 +198,17 @@ Mapped by `RoleEntity.java`.
 5. `PRIVATE_AGRO_DEALER`
 6. `ORGANIC_FERTILIZER_PRODUCER`
 
+Rows are seeded on first boot by `config/DataSeeder.java`, along with a starting
+set of areas and one `SYSTEM_ADMIN` — see §8.
+
+**Only three of these six may be self-registered.** `POST /api/v1/auth/register`
+is `permitAll`, so whatever it accepts is effectively unauthenticated; it takes
+`FARMER`, `PRIVATE_AGRO_DEALER` and `ORGANIC_FERTILIZER_PRODUCER` and returns
+**403** for anything else (`AuthServiceImpl.SELF_REGISTERABLE_ROLES`). The other
+three are appointments, granted by an existing `SYSTEM_ADMIN` through
+`PATCH /api/v1/admin/users/{id}/role`. Do not widen that set — it was a live
+privilege-escalation hole, not a convenience.
+
 ### `users` Table
 Mapped by `UserEntity.java`. Implements Spring Security `UserDetails`.
 - `user_id` (BIGINT, Primary Key, Identity)
@@ -195,7 +219,7 @@ Mapped by `UserEntity.java`. Implements Spring Security `UserDetails`.
 - `full_name` (VARCHAR(120), Nullable), `address` (VARCHAR(255), Nullable), `contact_number` (VARCHAR(20), Nullable) — the editable profile, maintained by the user through `PUT /api/v1/users/me/profile`. All nullable: accounts exist before anyone fills a profile in. `username` stays the login identity; `full_name` is only a display name. `address` doubles as the officer's agrarian centre — same column, different label on screen.
 - `role_id` (BIGINT, Foreign Key referencing `roles.role_id`)
 - `area_id` (BIGINT, Foreign Key referencing `areas.area_id`, Nullable) — set by `POST /api/v1/officers/assign`.
-- `is_banned` (BOOLEAN, Default: false)
+- `is_banned` (BOOLEAN, Default: false) — set by `POST /api/v1/admin/users/{id}/ban`. **Enforced in two places**: login refuses a banned account, and `JwtAuthFilter` re-reads `isEnabled()` on every request so an already-issued token stops working immediately rather than at expiry.
 - `is_assigned` (BOOLEAN, Default: false) — set true when an officer is assigned to an area.
 - `created_at` (TIMESTAMP, Updatable = false)
 
@@ -204,8 +228,27 @@ Mapped by `AreaEntity.java`. Geographic areas an agrarian service officer can be
 - `area_id` (BIGINT, Primary Key, Identity)
 - `area_name` (VARCHAR(100), Nullable = false)
 - `district` (VARCHAR(100), Nullable = false)
+- `is_active` (BOOLEAN, Nullable = false, `@ColumnDefault("true")`) — **areas are deactivated, never deleted.** Farmers, requests, transfers and handovers all reference an area, so a hard delete would either trip a foreign key or orphan auditable history. `GET /api/v1/areas` returns only active rows, which is what takes a retired area out of every picker; `GET /api/v1/admin/areas` returns all of them.
 - Unique constraint `uq_area_name_district` on (`area_name`, `district`).
-- *Note: no create/update endpoint exists yet — rows must currently be seeded manually. `GET /api/v1/areas` returns an empty list until then, and the Assign Officers screen shows "No areas exist yet".*
+- Seeded on first boot by `DataSeeder`, and maintained afterwards through `POST`/`PATCH /api/v1/admin/areas` — see §8.
+
+### `admin_audit_logs` Table
+Mapped by `AdminAuditLogEntity.java`. Every privileged action a `SYSTEM_ADMIN` takes.
+- `log_id` (BIGINT, Primary Key, Identity)
+- `actor_user_id` (BIGINT, Nullable = false) — the acting admin, **from the JWT**.
+- `action` (VARCHAR(60), Nullable = false) — a constant from `AuditService.Action`.
+- `target_user_id` (BIGINT, Nullable) — the user acted upon, when there is one.
+- `target_entity` (VARCHAR(100), Nullable) — a non-user target, e.g. `"area:7"`.
+- `details` (VARCHAR(500), Nullable) — what changed, from what to what. **Never a password, hash or secret**; a reset records only that it happened.
+- `created_at` (TIMESTAMP, Nullable = false, Updatable = false, `@PrePersist`)
+
+> **Append-only, and that is the whole point.** There is no update or delete
+> endpoint and there must never be one — a log an administrator can rewrite
+> records nothing. `AuditService` is the only writer, and `record(...)` is
+> `@Transactional(propagation = MANDATORY)`: it refuses to run without a caller
+> transaction to join, so an action and its audit row commit together or
+> neither does. "Remember to log in the same transaction" is enforced by the
+> container rather than left to discipline.
 
 ### `fertilizer_batches` Table
 Mapped by `FertilizerBatchEntity.java`. Represents supply chain fertilizer batch records synced after blockchain transaction minting.
@@ -368,7 +411,7 @@ The frontend mirrors this: `NEXT_PUBLIC_API_URL` points at
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `POST` | `/api/v1/auth/register` | Register a new user | `RegisterRequest` | `AuthResponse` | Yes |
+| `POST` | `/api/v1/auth/register` | Register a new user. **Only `FARMER`, `PRIVATE_AGRO_DEALER` and `ORGANIC_FERTILIZER_PRODUCER`** — any other role is a 403 (see §3, `roles`) | `RegisterRequest` | `AuthResponse` | Yes |
 | `POST` | `/api/v1/auth/login` | Authenticate user & issue JWT | `LoginRequest` | `AuthResponse` | Yes |
 | `POST` | `/api/v1/auth/refresh` | Refresh expired access token | `RefreshTokenRequest` | `AuthResponse` | Yes |
 | `GET` | `/api/v1/auth/me` | Fetch authenticated user profile | None | `AuthResponse` | No (JWT Required) |
@@ -556,7 +599,7 @@ The response carries `creditTokenIds` so the admin's queue can read
 
 | Method | Endpoint | Description | Request Body | Response | Public? |
 |---|---|---|---|---|---|
-| `GET` | `/api/v1/areas` | List all areas, ordered by district then area name | None | `List<AreaResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `GET` | `/api/v1/areas` | **Active** areas only, ordered by district then area name. Deactivated ones are excluded so a retired area is unpickable — the admin list at `/api/v1/admin/areas` shows all of them | None | `List<AreaResponseDTO>` | No (JWT, any role — every role picks an area somewhere) |
 
 ### Officers (`/api/v1/officers`)
 
@@ -588,6 +631,50 @@ Review rules enforced in `FertilizerRequestService`:
 > `JwtAuthFilter` supplies the `ROLE_<name>` authority from the token's `role`
 > claim. `SecurityConfig.authorizeHttpRequests` needs no change — they are
 > covered by the existing `anyRequest().authenticated()`.
+
+### Platform Administration (`/api/v1/admin`)
+
+**Every endpoint below is `@PreAuthorize("hasRole('SYSTEM_ADMIN')")`, and the
+acting admin always comes from the JWT.** Read §8 before changing any of them —
+the separation of duties they enforce is the reason the role exists.
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/admin/users` | User directory. Optional `?role=`, `?areaId=`, `?isBanned=`, `?search=` (username + email, case-insensitive), `?page=`, `?size=` (max 100). Newest account first | None | `PageResponseDTO<AdminUserSummaryDTO>` | No (JWT + `SYSTEM_ADMIN`) |
+| `GET` | `/api/v1/admin/users/{id}` | One account plus counts of its requests, reviews, handovers, orders and listings — what to read before acting | None | `AdminUserDetailDTO` | No (same) |
+| `POST` | `/api/v1/admin/users/{id}/ban` | Ban. Refused on yourself and on another `SYSTEM_ADMIN` | None | `AdminUserDetailDTO` | No (same) |
+| `POST` | `/api/v1/admin/users/{id}/unban` | Restore access | None | `AdminUserDetailDTO` | No (same) |
+| `POST` | `/api/v1/admin/users/{id}/reset-password` | Set a new password (min 8). BCrypt-hashed on arrival; **never logged, returned, or written to the audit details** | `ResetPasswordRequestDTO` | `AdminUserDetailDTO` | No (same) |
+| `PATCH` | `/api/v1/admin/users/{id}/role` | Change role. Guard rails below | `ChangeRoleRequestDTO` | `AdminUserDetailDTO` | No (same) |
+| `PATCH` | `/api/v1/admin/users/{id}/area` | Assign, move, or (with `areaId: null`) clear an officer's area | `AssignUserAreaRequestDTO` | `AdminUserDetailDTO` | No (same) |
+| `DELETE` | `/api/v1/admin/users/{id}/wallet` | **Clear** a wallet link. There is deliberately no counterpart that sets one — see §8 | None | `AdminUserDetailDTO` | No (same) |
+| `GET` | `/api/v1/admin/areas/coverage` | Every area with its serving officer or `isVacant`, plus that area's farmer and pending-request counts | None | `List<AreaCoverageResponseDTO>` | No (same) |
+| `GET` | `/api/v1/admin/areas` | Every area **including deactivated ones** | None | `List<AdminAreaResponseDTO>` | No (same) |
+| `POST` | `/api/v1/admin/areas` | Create an area | `AreaRequestDTO` | `AdminAreaResponseDTO` (201) | No (same) |
+| `PATCH` | `/api/v1/admin/areas/{id}` | Rename an area | `AreaRequestDTO` | `AdminAreaResponseDTO` | No (same) |
+| `POST` | `/api/v1/admin/areas/{id}/deactivate` | Soft delete. **Refused (409) while an officer serves it or any farmer is registered in it** | None | `AdminAreaResponseDTO` | No (same) |
+| `POST` | `/api/v1/admin/areas/{id}/activate` | The inverse, so retirement isn't a one-way door | None | `AdminAreaResponseDTO` | No (same) |
+| `GET` | `/api/v1/admin/wallets` | Wallet link status for every account. Optional `?unlinkedOnly=true`. `blocking` flags an unlinked officer or government admin | None | `List<AdminWalletStatusDTO>` | No (same) |
+| `GET` | `/api/v1/admin/health` | The operational warning summary — every count reads healthy at zero | None | `SystemHealthResponseDTO` | No (same) |
+| `GET` | `/api/v1/admin/audit-logs` | The append-only trail, newest first. Optional `?actorUserId=`, `?action=`, `?from=`, `?to=` (ISO date-time), `?page=`, `?size=` | None | `PageResponseDTO<AdminAuditLogResponseDTO>` | No (same) |
+
+Role-change guard rails, all enforced in `AdminUserService.changeRole` and each
+returning a message that **names the specific blocker** — "cannot change role"
+with no reason leaves an admin with nothing to do about it:
+- you cannot change your own role (the standard way to lock yourself out);
+- the **last remaining `SYSTEM_ADMIN`** cannot be demoted — nobody would be left able to appoint another, and recovery would need a database edit;
+- an officer still assigned to an area must be unassigned first;
+- a seller with `ACTIVE` listings or open orders (`PENDING_CONFIRMATION`/`CONFIRMED`) cannot be converted;
+- a farmer with open requests (`PENDING`/`APPROVED`/`PARTIALLY_COLLECTED`) or open orders cannot be converted — only a farmer can confirm an order or collect against a request.
+
+One-officer-per-area is enforced in `assignArea`, and the 409 names the
+incumbent. It is a service rule rather than a unique index because
+`users.area_id` is also set for farmers.
+
+`GET /api/v1/admin/health` counts `RequestStatus.PENDING` requests older than 7
+days. The original brief called that state "SUBMITTED"; this codebase names the
+unreviewed state `PENDING` (`SUBMITTED` belongs to `ClaimStatus`), and the
+`PENDING` count is the one that means the same thing.
 
 ---
 
@@ -659,3 +746,69 @@ When implementing new features or modifying existing code in this repository, st
 
 5. **Security Configuration**:
    - When adding new REST endpoints, verify if they require authentication or public access, and update `SecurityConfig.java` accordingly.
+
+---
+
+## 8. The SYSTEM_ADMIN operator panel — read this before touching `/admin/**`
+
+### The design principle: separation of duties
+
+**A `SYSTEM_ADMIN` is a platform operator, not a participant in the fertilizer
+system.** They decide *who may act*; they never act. Concretely, there is no
+path by which a system administrator can mint, transfer, burn, hold tokens,
+issue subsidy credits, approve a redemption claim, or touch a batch, listing or
+order — and none may be added. Those powers belong to `GOVERNMENT_ADMIN` and
+the two seller roles, and the value of the split is that an operator who can
+create accounts cannot also spend from the treasury with them.
+
+This is why `/api/v1/admin/**` is entirely user and platform administration,
+and why the admin services reach into `fertilizer_requests`, `market_orders`,
+`product_listings` and `distribution_logs` **only through `count*` reads** —
+for the activity figures on the user detail screen and for the role-change
+guard rails. Nothing there writes.
+
+The pre-existing `SYSTEM_ADMIN` grants on domain endpoints
+(`/credits/reconciliation`, `/redemption-claims`, `/orders`, `/batches`) are
+all read-only and were left as they are. Do not add a write.
+
+### The registration hole this closed
+
+`POST /api/v1/auth/register` is `permitAll` and used to accept **any** role
+from the request body, so anyone on the internet could self-register as
+`GOVERNMENT_ADMIN` or `SYSTEM_ADMIN`. It now accepts only the three
+self-service identities (§3, `roles`) and returns 403 otherwise. The role is
+resolved and authorised *before* the user row is written, so a rejected
+registration leaves nothing behind.
+
+That closure is what makes `config/DataSeeder.java` load-bearing rather than a
+convenience: with self-registration shut, there would otherwise be no way to
+create the first privileged account. On first boot it seeds the six roles, a
+starting set of areas, and one `SYSTEM_ADMIN` from `SEED_ADMIN_EMAIL`,
+`SEED_ADMIN_USERNAME` and `SEED_ADMIN_PASSWORD`, falling back to development
+defaults and **logging a warning when the built-in password is used**. Every
+step checks before it writes, so restarting changes nothing.
+
+### Wallets are clear-only, on purpose
+
+`DELETE /api/v1/admin/users/{id}/wallet` removes a wallet link. **There is no
+endpoint that sets one, and adding one would be a serious vulnerability.**
+Tokens are addressed to whatever wallet a user's row names, so an admin who
+could write that field could point a government admin's mint, an officer's
+stock transfer or a farmer's credits at a wallet of their own — and every
+on-chain record would look perfectly legitimate. Clearing grants nothing: the
+user must connect and sign with the new wallet themselves through
+`PATCH /api/v1/users/me/wallet`, which proves they hold its key.
+
+### What never leaves the server
+
+- **No password, in any form.** No admin response DTO has a password field, the reset endpoint neither echoes nor logs the value, and the audit row records only that a reset occurred.
+- **No full wallet address in a list view.** `AdminUserSummaryDTO`, `AdminUserDetailDTO` and `AdminWalletStatusDTO` all carry `walletAddressTruncated` (`0x1234…abcd`) plus a boolean. A list endpoint is the easiest thing in the app to scrape, and the operator has no use for the full string when they cannot set one.
+- **No actor id from a payload.** Not one admin request DTO carries an actor, admin or performed-by field; the acting user is resolved through `CurrentUserProvider` in all ten mutating methods.
+
+### Bans take effect immediately
+
+`is_banned` was already checked at login, but `JwtAuthFilter` did not re-check
+it, so an existing token kept working until expiry — long enough to finish
+whatever got the account banned. The filter now calls `userDetails.isEnabled()`
+on every request and leaves the security context unauthenticated when it fails,
+yielding a 401 from `SecurityConfig`'s entry point.

@@ -7,6 +7,7 @@ import com.bandits.bhumisaara.dto.response.AuthResponse;
 import com.bandits.bhumisaara.dto.response.TokenValidationResponse;
 import com.bandits.bhumisaara.entity.RoleEntity;
 import com.bandits.bhumisaara.entity.UserEntity;
+import com.bandits.bhumisaara.enums.Role;
 import com.bandits.bhumisaara.exception.AccountBannedException;
 import com.bandits.bhumisaara.exception.InvalidTokenException;
 import com.bandits.bhumisaara.repository.RoleRepository;
@@ -15,6 +16,7 @@ import com.bandits.bhumisaara.security.JwtService;
 import com.bandits.bhumisaara.service.AuthService;
 import io.jsonwebtoken.JwtException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -26,13 +28,32 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.stream.Collectors;
+import java.util.EnumSet;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 @Transactional
 public class AuthServiceImpl implements AuthService {
+
+    /**
+     * The only roles anyone may hand themselves at the public registration
+     * endpoint.
+     * <p>
+     * {@code /auth/register} is {@code permitAll}, so whatever this set allows
+     * is effectively unauthenticated. The three below are self-service
+     * identities — a farmer, a dealer or a producer signing up for the
+     * platform. The other three are appointments:
+     * {@code GOVERNMENT_ADMIN} mints tokens and issues credits,
+     * {@code AGRARIAN_SERVICE_OFFICER} burns them at handover, and
+     * {@code SYSTEM_ADMIN} administers accounts. Each is granted by an existing
+     * {@code SYSTEM_ADMIN} through {@code PATCH /admin/users/{id}/role}, or by
+     * the first-boot seed in {@code DataSeeder}.
+     */
+    private static final Set<Role> SELF_REGISTERABLE_ROLES = EnumSet.of(
+            Role.FARMER,
+            Role.PRIVATE_AGRO_DEALER,
+            Role.ORGANIC_FERTILIZER_PRODUCER);
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -42,6 +63,18 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public AuthResponse register(RegisterRequest request) {
+        // Resolve and authorise the role *before* writing anything: a rejected
+        // registration must not leave a half-built, role-less account behind.
+        if (!SELF_REGISTERABLE_ROLES.contains(request.getRole())) {
+            throw new AccessDeniedException(
+                    request.getRole() + " accounts cannot be self-registered. "
+                            + "Sign up as a farmer, dealer or producer, or ask a system administrator "
+                            + "to grant you this role.");
+        }
+
+        RoleEntity role = roleRepository.findByRoleName(request.getRole())
+                .orElseThrow(() -> new IllegalArgumentException("Role not found: " + request.getRole()));
+
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new IllegalArgumentException("Email already in use");
         }
@@ -51,19 +84,12 @@ public class AuthServiceImpl implements AuthService {
                 .username(request.getUsername())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
+                .role(role)
                 .isBanned(false)
                 .createdAt(LocalDateTime.now())
                 .build();
 
         UserEntity savedUser = userRepository.save(user);
-
-        // Assign role if provided
-        if (request.getRole() != null) {
-            RoleEntity role = roleRepository.findByRoleName(request.getRole())
-                    .orElseThrow(() -> new IllegalArgumentException("Role not found: " + request.getRole()));
-            savedUser.setRole(role);
-            userRepository.save(savedUser);
-        }
 
         String token = jwtService.generateToken(savedUser);
         String refreshToken = jwtService.generateRefreshToken(savedUser);

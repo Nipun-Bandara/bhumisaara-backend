@@ -10,4 +10,9 @@ import java.util.List;
 public interface AreaRepository extends JpaRepository<AreaEntity, Long> {
 
     List<AreaEntity> findAllByOrderByDistrictAscAreaNameAsc();
+
+    /** The pickable areas. Deactivated ones stay in history but not in dropdowns. */
+    List<AreaEntity> findByIsActiveTrueOrderByDistrictAscAreaNameAsc();
+
+    boolean existsByAreaNameIgnoreCaseAndDistrictIgnoreCase(String areaName, String district);
 }

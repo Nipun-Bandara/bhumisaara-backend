@@ -16,9 +16,15 @@ public class AreaService {
 
     private final AreaRepository areaRepository;
 
+    /**
+     * Reference data for every picker in the app. Deactivated areas are
+     * excluded — a retired area must not be assignable to a new officer or
+     * selectable by a farmer, which is the whole point of deactivating it.
+     * The admin coverage screen reads the unfiltered list instead.
+     */
     @Transactional(readOnly = true)
     public List<AreaResponseDTO> getAllAreas() {
-        return areaRepository.findAllByOrderByDistrictAscAreaNameAsc().stream()
+        return areaRepository.findByIsActiveTrueOrderByDistrictAscAreaNameAsc().stream()
                 .map(this::mapToDTO)
                 .collect(Collectors.toList());
     }

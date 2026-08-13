@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 
@@ -45,4 +46,15 @@ public interface MarketOrderRepository extends JpaRepository<MarketOrderEntity, 
     long sumAllCreditsSpent();
 
     long countBySellerIdAndStatusIn(Long sellerId, Collection<OrderStatus> statuses);
+
+    // ─── Platform administration ─────────────────────────────────────────────
+
+    long countByFarmerId(Long farmerId);
+
+    long countBySellerId(Long sellerId);
+
+    long countByFarmerIdAndStatusIn(Long farmerId, Collection<OrderStatus> statuses);
+
+    /** Orders a seller never acted on — the operator's stale-queue warning. */
+    long countByStatusAndCreatedAtBefore(OrderStatus status, LocalDateTime cutoff);
 }

@@ -17,6 +17,12 @@ public interface ProductListingRepository extends JpaRepository<ProductListingEn
 
     List<ProductListingEntity> findByStatusOrderByCreatedAtDesc(ListingStatus status);
 
+    // ─── Platform administration ─────────────────────────────────────────────
+
+    long countBySellerId(Long sellerId);
+
+    long countBySellerIdAndStatus(Long sellerId, ListingStatus status);
+
     /**
      * Reserves stock for an order in one statement.
      * <p>
