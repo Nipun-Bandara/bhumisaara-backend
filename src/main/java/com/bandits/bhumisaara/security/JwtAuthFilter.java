@@ -65,6 +65,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 UserDetails userDetails = userRepository.findByUsername(username)
                         .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+                // A ban has to bite immediately. The token itself stays
+                // cryptographically valid until it expires, so without this
+                // re-read a banned user would keep working for the rest of
+                // their session — long enough to finish whatever got them
+                // banned. Leaving the context unauthenticated yields a 401
+                // from SecurityConfig's entry point.
+                if (!userDetails.isEnabled()) {
+                    filterChain.doFilter(request, response);
+                    return;
+                }
                 if (jwtService.isTokenValid(jwt, userDetails)) {
                     UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                             userDetails, null, authorities);

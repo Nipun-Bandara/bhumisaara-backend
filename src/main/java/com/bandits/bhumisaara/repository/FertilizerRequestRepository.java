@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 
@@ -40,6 +41,20 @@ public interface FertilizerRequestRepository extends JpaRepository<FertilizerReq
 
     boolean existsByFarmer_UserIdAndSeasonAndFertilizerTypeAndStatus(
             Long farmerId, String season, String fertilizerType, RequestStatus status);
+
+    // ─── Platform administration ─────────────────────────────────────────────
+
+    long countByFarmer_UserId(Long farmerId);
+
+    long countByReviewedByOfficer_UserId(Long officerId);
+
+    long countByFarmer_UserIdAndStatusIn(Long farmerId, Collection<RequestStatus> statuses);
+
+    /** How much unreviewed work a vacant area is accumulating. */
+    long countByStatusAndFarmer_Area_AreaId(RequestStatus status, Long areaId);
+
+    /** Requests nobody has reviewed — the operator's stale-queue warning. */
+    long countByStatusAndCreatedAtBefore(RequestStatus status, LocalDateTime cutoff);
 
     /**
      * Demand per area and fertilizer type: how much officers have been told to

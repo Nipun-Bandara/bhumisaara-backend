@@ -17,4 +17,13 @@ public interface DistributionLogRepository extends JpaRepository<DistributionLog
     List<DistributionLogEntity> findByOfficerIdOrderByCreatedAtDesc(Long officerId);
 
     List<DistributionLogEntity> findByFarmerIdOrderByCreatedAtDesc(Long farmerId);
+
+    // ─── Platform administration ─────────────────────────────────────────────
+
+    long countByFarmerId(Long farmerId);
+
+    long countByOfficerId(Long officerId);
+
+    /** Handovers a farmer says never reached them — each one needs a human. */
+    long countByDisputedTrue();
 }
