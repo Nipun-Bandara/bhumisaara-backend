@@ -8,20 +8,24 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
+/** One farmer's subsidy credit issuance for one season. */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class BatchResponseDTO {
+public class CreditIssuanceResponseDTO {
 
-    private Long batchId;
+    private Long issuanceId;
+    private Long farmerId;
+    private String farmerName;
+    private String farmerWallet;
+    private String season;
+    private Integer creditsKg;
     private String tokenId;
-    /** Always STOCK — labelled so the UI never renders a batch as a credit. */
+    /** Always SUBSIDY_CREDIT — a claim on the treasury, not on a warehouse. */
     private TokenType tokenType;
     private String transactionHash;
-    private String importerName;
-    private String fertilizerType;
-    private Integer volumeKg;
-    private Long mintedByUserId;
+    private Long issuedByUserId;
+    private String issuedByName;
     private LocalDateTime createdAt;
 }

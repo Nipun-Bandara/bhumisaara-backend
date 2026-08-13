@@ -33,7 +33,11 @@ src/main/java/com/bandits/bhumisaara/
 │   ├── FertilizerBatchController.java # Fertilizer batch minting & querying endpoints
 │   ├── FertilizerRequestController.java # Farmer subsidy requests & officer review
 │   ├── OfficerController.java      # Officer listing & area-assignment endpoints
-│   └── DistributionController.java # Farmer handover / token-burn distribution endpoints
+│   ├── DistributionController.java # Farmer handover / token-burn distribution endpoints
+│   ├── SubsidyCreditController.java # Credit issuance, farmer balance, reconciliation
+│   ├── ProductListingController.java # Seller listings + the farmer-facing marketplace
+│   ├── MarketOrderController.java  # Orders & the mandatory farmer confirmation
+│   └── RedemptionClaimController.java # Seller claims & government review
 ├── dto/                            # Data Transfer Objects
 │   ├── request/                    # Incoming payload DTOs with validation
 │   │   ├── AssignOfficerRequestDTO.java
@@ -76,7 +80,11 @@ src/main/java/com/bandits/bhumisaara/
 ├── enums/                          # System Enums
 │   ├── RequestStatus.java
 │   ├── Role.java
-│   └── SackStatus.java
+│   ├── SackStatus.java
+│   ├── TokenType.java              # STOCK vs SUBSIDY_CREDIT — see §2.1
+│   ├── ListingStatus.java
+│   ├── OrderStatus.java
+│   └── ClaimStatus.java
 ├── exception/                      # Global Exception Handlers & Custom Exceptions
 │   ├── AccountBannedException.java
 │   ├── GlobalExceptionHandler.java
@@ -105,9 +113,59 @@ src/main/java/com/bandits/bhumisaara/
     ├── FertilizerBatchService.java
     ├── FertilizerRequestService.java
     ├── OfficerService.java
+    ├── CreditMath.java             # THE organic 1.5x conversion. One copy, integer maths
+    ├── SubsidyCreditService.java   # Credit issuance & farmer balances
+    ├── ProductListingService.java  # Seller listings; isOrganic derived from role
+    ├── MarketOrderService.java     # Orders; only the farmer can complete one
+    ├── RedemptionClaimService.java # Claims; the seller signs the settling burn
+    ├── CreditOversightService.java # Reconciliation & seller anomaly flags
     └── impl/
         └── AuthServiceImpl.java
 ```
+
+---
+
+## 2.1 Two Token Types — read this before touching any token code
+
+The ERC-1155 contract now carries **two kinds of token**, and they must never be
+summed, swapped or confused. `com.bandits.bhumisaara.enums.TokenType` names them,
+and every table that records a mint carries a `token_type` column.
+
+| | `STOCK` | `SUBSIDY_CREDIT` |
+|---|---|---|
+| Backed by | fertilizer in a warehouse | the treasury |
+| Created by | `POST /api/v1/batches` (a real import) | `POST /api/v1/credits/issue` (a funded season) |
+| 1 token means | 1 kg of physical stock | an entitlement to 1 kg chemical **or 1.5 kg organic** |
+| Burned when | a farmer physically collects | a seller redeems the credit for cash |
+| Tracked in | `fertilizer_batches`, `sacks`, `batch_transfers`, `distribution_logs` | `subsidy_credit_issuances`, `market_orders`, `redemption_claims` |
+
+`batch_transfers` and `distribution_logs` carry no `token_type` column: they are
+reachable only from a `fertilizer_batches` row, so they are STOCK by
+construction. Adding one would have meant editing the government → officer →
+farmer flow, which is explicitly out of bounds.
+
+**The organic 1.5× conversion lives in exactly one place:**
+`com.bandits.bhumisaara.service.CreditMath`. It is integer arithmetic
+(`× 2 / 3` up, `× 3 / 2` down) so a browser's floating point can never disagree
+with the server in the farmer's favour. The frontend mirrors it in
+`lib/marketplace.ts` for the live preview, but **every order re-derives the cost
+server-side** — no client-computed total is ever stored.
+
+### Credit token ids are per-season
+Every farmer issued credits for a given season shares **one** ERC-1155 token id.
+That is what makes a season's credits fungible between farmers, and what
+`balanceOf(wallet, tokenId)` needs to read a balance at all. The season's first
+issuance creates the token (`mintTo`); every later one adds supply to it
+(`mintAdditionalSupplyTo`). `SubsidyCreditService.requireSeasonTokenIdMatches`
+rejects an issuance whose token id disagrees with the season's.
+
+### The backend has no web3 client
+It never did, and this feature did not add one. Every chain interaction is
+signed and read **in the browser**; the backend records confirmed hashes. So
+`GET /api/v1/credits/balance` returns the Postgres *ledger* position plus the
+season token ids, and the client reads the authoritative on-chain balance
+itself. A gap between the two is real information — it means credits moved
+off-platform — and both figures are shown rather than reconciled away.
 
 ---
 
@@ -235,6 +293,61 @@ Mapped by `UserQuotaEntity.java`. Tracks each farmer's remaining fertilizer allo
 - Unique constraint on (`farmer_id`, `fertilizer_type`) — one quota row per farmer per fertilizer type.
 - *Note: no allocation/replenishment endpoint exists yet — rows must currently be seeded manually. A farmer with no row for a given fertilizer type is rejected by `POST /api/v1/distributions` (400, "No quota allocated").*
 
+### `subsidy_credit_issuances` Table
+Mapped by `SubsidyCreditIssuanceEntity.java`. One season's subsidy credits, minted to one farmer's wallet. Backed by the treasury, not by goods — see §2.1.
+- `issuance_id` (BIGINT, Primary Key, Identity)
+- `farmer_id` (BIGINT, Nullable = false) — References `users.user_id`.
+- `season` (VARCHAR(50), Nullable = false) — matches `fertilizer_requests.season`.
+- `credits_kg` (INTEGER, Nullable = false)
+- `token_id` (VARCHAR, Nullable = false) — the ERC-1155 id the season's credits live under, `String` per §7. **Not in the original spec but load-bearing**: without it no `balanceOf` read is possible, and every farmer in a season must share one id.
+- `token_type` (VARCHAR(20), Nullable = false, `@ColumnDefault("'SUBSIDY_CREDIT'")`) — always `SUBSIDY_CREDIT`.
+- `transaction_hash` (VARCHAR, **Unique**, Nullable = false) — the replay guard.
+- `issued_by_user_id` (BIGINT, Nullable = false) — the issuing admin, **from the JWT**.
+- `created_at` (TIMESTAMP, Updatable = false, `@PrePersist`)
+- Unique constraint `uq_issuance_farmer_season` on (`farmer_id`, `season`) — **one issuance per farmer per season**, enforced by the database as well as the service so two admins clicking at once can't double-fund.
+
+### `product_listings` Table
+Mapped by `ProductListingEntity.java`. What a dealer or producer offers farmers.
+- `listing_id` (BIGINT, Primary Key, Identity)
+- `seller_id` (BIGINT, Nullable = false) — **always from the JWT**, never a payload id.
+- `product_name` (VARCHAR(120)), `fertilizer_type` (VARCHAR(60)), `description` (VARCHAR(1000), Nullable)
+- `is_organic` (BOOLEAN, Nullable = false) — **derived from the seller's role on every write**, never accepted from the client. It sets the credit conversion rate, so a dealer who could flag a listing organic would be charging 1 credit for 1.5kg.
+- `price_lkr_per_kg` (INTEGER, Nullable = false), `available_kg` (INTEGER, Nullable = false)
+- `is_subsidy_eligible` (BOOLEAN, Nullable = false, `@ColumnDefault("true")`)
+- `status` (VARCHAR(20), Nullable = false, `@ColumnDefault("'ACTIVE'")`) — `ListingStatus`: `ACTIVE`, `PAUSED`, `SOLD_OUT`. **`SOLD_OUT` is derived from `available_kg`**, never settable directly (409 if sent).
+- `created_at`, `updated_at` (TIMESTAMP, `@PrePersist`/`@PreUpdate`)
+
+### `market_orders` Table
+Mapped by `MarketOrderEntity.java`. **The anti-fraud mechanism — see the flow rules in §4.**
+- `order_id` (BIGINT, Primary Key, Identity)
+- `listing_id` (BIGINT, Nullable = false), `farmer_id` (BIGINT, Nullable = false)
+- `seller_id` (BIGINT, Nullable = false) — denormalised from the listing so a re-assigned listing can't move an order.
+- `quantity_kg` (INTEGER, Nullable = false)
+- `credits_used` (INTEGER, Nullable = false), `cash_amount_lkr` (INTEGER, Nullable = false) — **both server-derived through `CreditMath`**; a client total is never stored. Cash is *recorded, never processed* — no payment rail exists.
+- `status` (VARCHAR(25), Nullable = false, `@ColumnDefault("'PENDING_CONFIRMATION'")`) — `OrderStatus`.
+- `token_type` (VARCHAR(20), Nullable = false, `@ColumnDefault("'SUBSIDY_CREDIT'")`)
+- `credit_transfer_hash` (VARCHAR, **Unique**, Nullable) — null until the farmer confirms, and permanently null on a cash-only order.
+- `created_at`, `confirmed_at`, `completed_at`, `disputed_at` (TIMESTAMP)
+- *Note: `confirmed_at` is when the **seller** marked goods ready, not the farmer's confirmation. The farmer's confirmation sets `completed_at` — it is the same action that moves the credits.*
+
+### `redemption_claims` Table
+Mapped by `RedemptionClaimEntity.java`. A seller settling credits with the treasury.
+- `claim_id` (BIGINT, Primary Key, Identity)
+- `seller_id` (BIGINT, Nullable = false) — **from the JWT**.
+- `credits_claimed` (INTEGER, Nullable = false)
+- `status` (VARCHAR(20), Nullable = false, `@ColumnDefault("'SUBMITTED'")`) — `ClaimStatus`: `SUBMITTED`, `APPROVED`, `PAID`, `REJECTED`.
+- `token_type` (VARCHAR(20), Nullable = false, `@ColumnDefault("'SUBSIDY_CREDIT'")`)
+- `burn_transaction_hash` (VARCHAR, **Unique**, Nullable) — null until the seller burns.
+- `submitted_at` (TIMESTAMP, Updatable = false), `processed_at` (TIMESTAMP, Nullable), `processed_by_user_id` (BIGINT, Nullable)
+
+> **Why redemption is two steps.** The spec reads "on approval the credits are
+> burned". They can't be — an ERC-1155 balance is destroyable only by its holder
+> (or an approved operator), and the credits sit in the **seller's** wallet. A
+> government admin has no way to burn them without the seller first granting
+> `setApprovalForAll`, which would be a strictly worse security posture. So
+> `APPROVED` is the admin authorising payment and `PAID` is the seller's burn
+> settling it. Nothing counts as redeemed until that burn hash lands.
+
 ---
 
 ## 4. REST API Documentation
@@ -343,6 +456,87 @@ further. Each has its own message:
 > The pre-handover quota check against `user_quotas` was removed: `approved_kg`
 > on the request is now the ceiling, and it is enforced per-visit through
 > `collected_kg`. `user_quotas` is unseeded and was rejecting every handover.
+
+### Subsidy Credits (`/api/v1/credits`)
+
+The issuing admin and the balance-reading farmer both come from the JWT. See §2.1 for why the balance endpoint returns a ledger position rather than a chain read.
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/credits/seasons` | Seasons an admin may issue against — filed requests plus already-funded seasons | None | `List<String>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `GET` | `/api/v1/credits/eligible-farmers?season=` | Every farmer, annotated with `alreadyIssued` / `canIssue`. Ineligible rows are **returned, not filtered** — the admin needs to see *why* a name is unselectable | None | `List<EligibleFarmerResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`) |
+| `POST` | `/api/v1/credits/issue` | Record a credit mint that already confirmed on-chain | `IssueCreditsRequestDTO` | `CreditIssuanceResponseDTO` (201) | No (JWT + `GOVERNMENT_ADMIN`) |
+| `GET` | `/api/v1/credits/issuances` | Every issuance nationally — the treasury's mint ledger | None | `List<CreditIssuanceResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `GET` | `/api/v1/credits/balance` | The calling farmer's ledger position **plus the season token ids to read `balanceOf` against** | None | `CreditBalanceResponseDTO` | No (JWT + `FARMER`) |
+| `GET` | `/api/v1/credits/reconciliation?season=` | Issued vs redeemed vs held. Non-zero `discrepancyCredits` is an anomaly | None | `CreditReconciliationResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+
+Validations in `SubsidyCreditService.issueCredits`, all in one `@Transactional`:
+- duplicate `transaction_hash` → 409 (replay guard);
+- the target user must hold `FARMER` **and** have a `wallet_address`;
+- one issuance per (farmer, season) → 409, backed by a unique index;
+- `token_id` must match the season's existing credit token, if one exists → 400.
+
+Reconciliation maths in `CreditOversightService`: the identity
+`issued = redeemed + heldByFarmers + heldBySellers` must hold, because credits
+are created only by an issuance and destroyed only by a redemption burn. A gap
+means credits moved wallet-to-wallet outside the marketplace. A seller is
+`flagged` when they have redeemed ≥ 10 credits and their redemption rate exceeds
+110% of what their completed orders earned (or they redeemed with no orders at all).
+
+### Product Listings (`/api/v1/listings`)
+
+Ownership comes from the JWT on **every** write — no endpoint accepts a seller id.
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/listings` | The marketplace: **ACTIVE listings only**. Optional `?fertilizerType=`, `?isOrganic=`, `?isSubsidyEligible=`, `?sellerId=` | None | `List<ProductListingResponseDTO>` | No (JWT, any role) |
+| `GET` | `/api/v1/listings/mine` | The calling seller's own listings, whatever their status | None | `List<ProductListingResponseDTO>` | No (JWT + `PRIVATE_AGRO_DEALER`/`ORGANIC_FERTILIZER_PRODUCER`) |
+| `GET` | `/api/v1/listings/{listingId}` | One listing | None | `ProductListingResponseDTO` | No (JWT, any role) |
+| `POST` | `/api/v1/listings` | Create. `isOrganic` is set from the caller's role | `ProductListingRequestDTO` | `ProductListingResponseDTO` (201) | No (JWT + seller roles) |
+| `PUT` | `/api/v1/listings/{listingId}` | Replace one of the caller's own listings | `ProductListingRequestDTO` | `ProductListingResponseDTO` | No (JWT + seller roles) |
+| `DELETE` | `/api/v1/listings/{listingId}` | Delete. **Refused (409) while any order is still riding on it** — pause instead | None | 204 | No (JWT + seller roles) |
+
+### Marketplace Orders (`/api/v1/orders`)
+
+**The role split here is the anti-fraud design, not an accident.** A seller can
+reach `CONFIRMED` and no further; there is deliberately **no endpoint by which a
+seller can complete an order or move a farmer's credits**.
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `GET` | `/api/v1/orders/quote?listingId=&quantityKg=&creditsUsed=` | Server-side costing so the live breakdown can be trusted | None | `OrderQuoteResponseDTO` | No (JWT + `FARMER`) |
+| `POST` | `/api/v1/orders` | Place an order: reserves stock, **moves no tokens** | `PlaceOrderRequestDTO` | `MarketOrderResponseDTO` (201) | No (JWT + `FARMER`) |
+| `GET` | `/api/v1/orders/me` | The calling farmer's orders, newest first | None | `List<MarketOrderResponseDTO>` | No (JWT + `FARMER`) |
+| `GET` | `/api/v1/orders/seller` | Orders placed with the calling seller | None | `List<MarketOrderResponseDTO>` | No (JWT + seller roles) |
+| `GET` | `/api/v1/orders` | Every order nationally | None | `List<MarketOrderResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `PATCH` | `/api/v1/orders/{orderId}/ready` | Seller marks goods ready → `CONFIRMED`. **The furthest a seller can move an order** | None | `MarketOrderResponseDTO` | No (JWT + seller roles) |
+| `POST` | `/api/v1/orders/{orderId}/confirm` | **The farmer's confirmation** → `COMPLETED`. The only call that records a credit transfer | `ConfirmOrderRequestDTO` | `MarketOrderResponseDTO` | No (JWT + `FARMER`) |
+| `POST` | `/api/v1/orders/{orderId}/cancel` | Either party, while credits haven't moved. **Restores `available_kg`** | None | `MarketOrderResponseDTO` | No (JWT + `FARMER`/seller roles) |
+| `POST` | `/api/v1/orders/{orderId}/dispute` | "This was not what I received" on a completed order — flags, reverses nothing (mirrors the distribution dispute) | None | `MarketOrderResponseDTO` | No (JWT + `FARMER`) |
+
+Rules enforced in `MarketOrderService`, all server-side:
+- `placeOrder` re-derives `creditsUsed` bounds and `cashAmountLkr` through `CreditMath` — the client's total is never trusted, **especially the organic 1.5×**;
+- stock is reserved with a guarded `UPDATE … WHERE available_kg >= :amount`, so two farmers ordering the last 50kg cannot both succeed;
+- credits are refused unless the listing is subsidy-eligible, the farmer has an issuance, and the amount is within their ledger balance;
+- a farmer cannot order from their own listing;
+- `confirm` **requires** `credit_transfer_hash` when `credits_used > 0` and **rejects** one when it is zero;
+- duplicate `credit_transfer_hash` → 409.
+
+### Redemption Claims (`/api/v1/redemption-claims`)
+
+| Method | Endpoint | Description | Request Body | Response | Public? |
+|---|---|---|---|---|---|
+| `POST` | `/api/v1/redemption-claims` | File a claim, bounded by what completed orders earned less anything already claimed | `SubmitClaimRequestDTO` | `RedemptionClaimResponseDTO` (201) | No (JWT + seller roles) |
+| `GET` | `/api/v1/redemption-claims/me` | The calling seller's claims | None | `List<RedemptionClaimResponseDTO>` | No (JWT + seller roles) |
+| `GET` | `/api/v1/redemption-claims/pending` | Review queue (`SUBMITTED` + `APPROVED`), **oldest first** (FIFO) | None | `List<RedemptionClaimResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `GET` | `/api/v1/redemption-claims` | Every claim, newest first | None | `List<RedemptionClaimResponseDTO>` | No (JWT + `GOVERNMENT_ADMIN`/`SYSTEM_ADMIN`) |
+| `PATCH` | `/api/v1/redemption-claims/{claimId}/review` | Approve or reject. `PAID` is **not** settable here | `ReviewClaimRequestDTO` | `RedemptionClaimResponseDTO` | No (JWT + `GOVERNMENT_ADMIN`) |
+| `POST` | `/api/v1/redemption-claims/{claimId}/settle` | The seller records the burn that settles an approved claim → `PAID` | `SettleClaimRequestDTO` | `RedemptionClaimResponseDTO` | No (JWT + seller roles) |
+
+The claim ceiling (`sumOpenOrSettledCreditsBySeller`) counts every non-rejected
+claim, so a seller cannot file the same credits twice before either is processed.
+The response carries `creditTokenIds` so the admin's queue can read
+`balanceOf` against the seller's wallet and verify custody before approving.
 
 ### Users (`/api/v1/users`)
 

@@ -76,6 +76,7 @@ public class FertilizerBatchService {
         return BatchResponseDTO.builder()
                 .batchId(entity.getBatchId())
                 .tokenId(entity.getTokenId())
+                .tokenType(entity.getTokenType())
                 .transactionHash(entity.getTransactionHash())
                 .importerName(entity.getImporterName())
                 .fertilizerType(entity.getFertilizerType())
